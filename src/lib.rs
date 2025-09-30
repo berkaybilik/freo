@@ -26,8 +26,9 @@ impl AppConfig {
     pub fn keyword(&self) -> &str { &self.keyword }
 }
 
-pub fn run(config: &AppConfig, base_branch: &str) {
+pub fn run(config: &AppConfig, base_branch: &str, file_path: &std::path::PathBuf) {
     println!(
-        "Running for the reviewers eyes only with keyword: {} and base branch: {}", config.keyword(), base_branch
+        "Running for the reviewers eyes only with keyword: {} and base branch: {} for file: {}", 
+        config.keyword(), base_branch, file_path.display()
     );
 }

@@ -9,6 +9,9 @@ use for_the_reviewers_eyes_only::AppConfig;
 #[command(name = "freo")]
 #[command(about = "For the Reviewers Eyes Only", long_about = None)]
 struct Cli {
+    #[arg(short = 'f', long = "file")]
+    file: std::path::PathBuf,
+
     #[arg(short = 'b', long = "base-branch")]
     base_branch: Option<String>,
 
@@ -18,6 +21,11 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
+
+    if !cli.file.exists() {
+        eprintln!("Error: file not found at {}", cli.file.display());
+        std::process::exit(2);
+    }
 
     let base_branch = cli
         .base_branch
@@ -39,7 +47,7 @@ fn main() {
         }
     };
     
-    for_the_reviewers_eyes_only::run(&config, &base_branch);
+    for_the_reviewers_eyes_only::run(&config, &base_branch, &cli.file);
 }
 
 fn default_config_path() -> PathBuf {
