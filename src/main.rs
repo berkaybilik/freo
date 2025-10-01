@@ -12,9 +12,6 @@ struct Cli {
     #[arg(short = 'f', long = "file")]
     file: std::path::PathBuf,
 
-    #[arg(short = 'b', long = "base-branch")]
-    base_branch: Option<String>,
-
     #[arg(short = 'c', long = "config")]
     config: Option<String>,
 }
@@ -26,14 +23,6 @@ fn main() {
         eprintln!("Error: file not found at {}", cli.file.display());
         std::process::exit(2);
     }
-
-    let base_branch = cli
-        .base_branch
-        .or_else(|| env::var("GITHUB_BASE_REF").ok())
-        .unwrap_or_else(|| {
-            eprintln!("Error: --base-branch not set and GITHUB_BASE_REF not available.");
-            std::process::exit(2);
-        });
 
     let config_path: String = cli
         .config
@@ -47,7 +36,7 @@ fn main() {
         }
     };
     
-    for_the_reviewers_eyes_only::run(&config, &base_branch, &cli.file);
+    for_the_reviewers_eyes_only::run(&config, &cli.file);
 }
 
 fn default_config_path() -> PathBuf {
