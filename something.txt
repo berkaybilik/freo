@@ -1,0 +1,7 @@
+# FREO: line1
+// FREO line2
+//  FREO line3
+//  FREO: line4
+//FREO line5
+something something //FREO line6
+//  freo: line7
