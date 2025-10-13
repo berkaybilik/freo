@@ -1,4 +1,6 @@
-use std::{fs::File, io::{BufRead, BufReader}};
+use std::{fs::File, io::{BufRead, BufReader, BufWriter, Write}};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use tempfile::NamedTempFile;
 
 use serde::Deserialize;
 use regex::{Regex, RegexBuilder};
@@ -39,15 +41,10 @@ pub fn run(config: &AppConfig, file_path: &std::path::PathBuf) {
 
     println!("Finding matching lines...");
 
-    let matches = find_matching_lines(COMMENT_TOKEN, config.keyword(), file_path);
-    println!("Found {} matches", matches.len());
-
-    for matched_line in matches {
-        println!("{}", matched_line);
-    };
+    remove_matching_lines(COMMENT_TOKEN, config.keyword(), file_path);
 }
 
-fn build_keyword_comment_regexp(comment_token: &str, keyword: &str) -> Regex {
+fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
     let comment_token_literal = regex::escape(comment_token);
     let keyword_literal = regex::escape(keyword);
 
@@ -58,20 +55,58 @@ fn build_keyword_comment_regexp(comment_token: &str, keyword: &str) -> Regex {
         .unwrap_or_else(|e| panic!("Failed to build regex: {}", e))
 }
 
-fn find_matching_lines(comment_token: &str, keyword: &str, file_path: &std::path::PathBuf) -> Vec<String> {
-    let pattern: Regex = build_keyword_comment_regexp(comment_token, keyword);
+fn remove_matching_lines(comment_token: &str, keyword: &str, file_path: &std::path::PathBuf) {
+    let parent = file_path.parent().unwrap_or(std::path::Path::new("."));
+    let temp_file = NamedTempFile::new_in(parent).unwrap();
 
-    let file = File::open(file_path).unwrap_or_else(|e| panic!("Failed to open file: {}", e));
-    let reader = BufReader::new(file);
+    if let Err(e) = File::create(&temp_file.path()) {
+        eprintln!("Error: failed to create temp file in {}: {}", parent.display(), e);
+        return;
+    }
 
-    let mut matches= Vec::new();
+    let pattern: Regex = build_keyword_comment_pattern(comment_token, keyword);
+    
+    let reader = BufReader::new(File::open(file_path).unwrap()); 
+    let mut writer = BufWriter::new(temp_file.as_file());
 
-    for read_line in reader.lines() {
-        let line = read_line.unwrap_or_else(|e| panic!("Failed to read line: {}", e));
-        if pattern.is_match(&line) {
-            matches.push(line);
+    // Pending line is used to handle the case where the last line does not match and needs to be written to the file
+    // without a newline character. Example case: Suppose the file ends with:
+    // a
+    // If we just did writeln!("a") then, in the new file it would be:
+    // a\n
+    // We don't want this because we have to preserve all original data apart from the lines that match the pattern
+    let mut pending_line: Option<String> = None;
+    for line in reader.lines() {
+        let line = line.unwrap();
+        if !pattern.is_match(&line) {
+            if let Some(prev) = pending_line.replace(line) {
+                writeln!(writer, "{}", prev).unwrap();
+            }
         }
-    };
+    }
+    if let Some(last) = pending_line {
+        write!(writer, "{}", last).unwrap();
+    }
 
-    matches
+    // Flush buffered writes before syncing to disk
+    writer.flush().unwrap();
+    // Release the borrow on the underlying file before further ops
+    drop(writer); // Note to self: May avoid this if writer is moved to a separate scope
+
+    // Best-effort: copy only commonly preserved metadata (permissions/mode)
+    if let Ok(orig_meta) = std::fs::metadata(file_path) {
+        let mut perms = orig_meta.permissions();
+        perms.set_mode(orig_meta.mode());
+        let _ = std::fs::set_permissions(temp_file.path(), perms); 
+    }
+
+    // Ensure all data and metadata are durably written to the temp file
+    temp_file.as_file().sync_all().unwrap();
+
+    // Atomically replace the original file by persisting within the same directory
+    // Note to self: There may be a better way to scope reader and writer so that they are consumed before persisting
+    temp_file.persist(file_path).unwrap();
+
+    // Durability: fsync the parent directory to persist the rename
+    if let Ok(dir) = File::open(parent) { let _ = dir.sync_all(); }
 }
