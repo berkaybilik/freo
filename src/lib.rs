@@ -31,17 +31,20 @@ impl AppConfig {
     pub fn keyword(&self) -> &str { &self.keyword }
 }
 
-pub fn run(config: &AppConfig, file_path: &std::path::PathBuf) {
+pub fn run(config: &AppConfig, file_paths: &Vec<std::path::PathBuf>) {
     println!(
-        "Running for the reviewers eyes only with keyword: {} for file: {}", 
-        config.keyword(), file_path.display()
+        "Running for the reviewers eyes only with keyword: {}",
+        config.keyword()
     );
 
     const COMMENT_TOKEN: &str = "//";
 
     println!("Finding matching lines...");
 
-    remove_matching_lines(COMMENT_TOKEN, config.keyword(), file_path);
+    for file_path in file_paths {
+        println!("Processing file: {}", file_path.display());
+        remove_matching_lines(COMMENT_TOKEN, config.keyword(), file_path);
+    }
 }
 
 fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {

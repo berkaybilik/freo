@@ -9,8 +9,8 @@ use freo::AppConfig;
 #[command(name = "freo")]
 #[command(about = "For the Reviewers Eyes Only", long_about = None)]
 struct Cli {
-    #[arg(short = 'f', long = "file")]
-    file: std::path::PathBuf,
+    #[arg(short = 'f', long = "file", value_name = "FILE", num_args = 1.., required = true)]
+    files: Vec<std::path::PathBuf>,
 
     #[arg(short = 'c', long = "config")]
     config: Option<String>,
@@ -19,8 +19,9 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    if !cli.file.exists() {
-        eprintln!("Error: file not found at {}", cli.file.display());
+    let missing: Vec<&std::path::PathBuf> = cli.files.iter().filter(|p| !p.exists()).collect();
+    if !missing.is_empty() {
+        eprintln!("Error: file not found at {}", missing[0].display());
         std::process::exit(2);
     }
 
@@ -36,7 +37,7 @@ fn main() {
         }
     };
     
-    freo::run(&config, &cli.file);
+    freo::run(&config, &cli.files);
 }
 
 fn default_config_path() -> PathBuf {
