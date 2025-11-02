@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use for_the_reviewers_eyes_only::AppConfig;
+use freo::AppConfig;
 
 #[derive(Parser, Debug)]
 #[command(name = "freo")]
@@ -36,7 +36,7 @@ fn main() {
         }
     };
     
-    for_the_reviewers_eyes_only::run(&config, &cli.file);
+    freo::run(&config, &cli.file);
 }
 
 fn default_config_path() -> PathBuf {

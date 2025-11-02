@@ -1,0 +1,78 @@
+name: Build and Release binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }} ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux (x86_64)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+
+          # macOS (x86_64 and arm64)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+
+          # Windows (x86_64)
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # freo-<tag>-<target>.(tar.gz|zip)
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_NAME="freo"
+          VERSION="${GITHUB_REF_NAME}" # e.g. v1.2.3
+          TGT="${{ matrix.target }}"
+          OUTDIR="target/${TGT}/release"
+          PKGDIR="${BIN_NAME}-${VERSION}-${TGT}"
+          mkdir -p "${PKGDIR}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp "${OUTDIR}/${BIN_NAME}.exe" "${PKGDIR}/"
+            powershell -Command "Compress-Archive -Path '${PKGDIR}/*' -DestinationPath '${PKGDIR}.zip'"
+            echo "${PKGDIR}.zip" > pkgname.txt
+          else
+            cp "${OUTDIR}/${BIN_NAME}" "${PKGDIR}/"
+            tar -czf "${PKGDIR}.tar.gz" "${PKGDIR}"
+            echo "${PKGDIR}.tar.gz" > pkgname.txt
+          fi
+
+      - name: SHA256
+        if: runner.os != 'Windows'
+        run: shasum -a 256 "$(cat pkgname.txt)" > "$(cat pkgname.txt).sha256"
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            $(cat pkgname.txt)
+            $(cat pkgname.txt).sha256
