@@ -19,23 +19,15 @@ jobs:
           # Linux (x86_64)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive: tar.gz
 
           # macOS (x86_64 and arm64)
           - os: macos-latest
             target: x86_64-apple-darwin
-            archive: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: tar.gz
-
-          # Windows (x86_64)
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -55,18 +47,11 @@ jobs:
           OUTDIR="target/${TGT}/release"
           PKGDIR="${BIN_NAME}-${VERSION}-${TGT}"
           mkdir -p "${PKGDIR}"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cp "${OUTDIR}/${BIN_NAME}.exe" "${PKGDIR}/"
-            powershell -Command "Compress-Archive -Path '${PKGDIR}/*' -DestinationPath '${PKGDIR}.zip'"
-            echo "${PKGDIR}.zip" > pkgname.txt
-          else
-            cp "${OUTDIR}/${BIN_NAME}" "${PKGDIR}/"
-            tar -czf "${PKGDIR}.tar.gz" "${PKGDIR}"
-            echo "${PKGDIR}.tar.gz" > pkgname.txt
-          fi
+          cp "${OUTDIR}/${BIN_NAME}" "${PKGDIR}/"
+          tar -czf "${PKGDIR}.tar.gz" "${PKGDIR}"
+          echo "${PKGDIR}.tar.gz" > pkgname.txt          
 
       - name: SHA256
-        if: runner.os != 'Windows'
         run: shasum -a 256 "$(cat pkgname.txt)" > "$(cat pkgname.txt).sha256"
 
       - name: Release
