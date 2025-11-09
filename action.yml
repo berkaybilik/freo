@@ -1,0 +1,84 @@
+name: "freo linter"
+description: "Run freo on changed files only"
+inputs:
+  version:
+    description: "Release tag of freo to download (e.g., v1.2.3 or v1)"
+    required: true
+  repo:
+    description: "Owner/repo where freo releases live (e.g., your-org/freo)"
+    required: true
+  extra-args:
+    description: "Extra CLI flags for freo (optional)"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v5
+
+    - name: Detect changed files
+      id: cf
+      uses: tj-actions/changed-files@v47
+      with:
+        escape_json: false
+
+    - name: No changed files
+      if: ${{ steps.cf.outputs.added_files_count == '0' && steps.cf.outputs.modified_files_count == '0' }}
+      shell: bash
+      run: echo "No changed files detected; skipping freo."
+
+    - name: Download & install freo
+      if: ${{ steps.cf.outputs.added_files_count != '0' || steps.cf.outputs.modified_files_count != '0' }}
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        REPO: ${{ inputs.repo }}
+      run: |
+        set -euo pipefail
+
+        # Detect OS/arch to choose the right asset
+        case "${RUNNER_OS}" in
+          Linux)   OS_TRIPLE="unknown-linux-gnu" ;;
+          macOS)   OS_TRIPLE="apple-darwin" ;;
+          *) echo "Unsupported OS: ${RUNNER_OS}. Only Linux and macOS are supported."; exit 1 ;;
+        esac
+
+        case "${RUNNER_ARCH}" in
+          X64)   ARCH="x86_64" ;;
+          ARM64) ARCH="aarch64" ;;
+          *) echo "Unsupported ARCH: ${RUNNER_ARCH}"; exit 1 ;;
+        esac
+
+        TARGET="${ARCH}-${OS_TRIPLE}"
+        BASENAME="freo-${VERSION}-${TARGET}"
+        ASSET="${BASENAME}.tar.gz"
+        
+        curl -sSL -o "${ASSET}" "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+        curl -sSL -o "${ASSET}.sha256" "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}.sha256"
+        
+        # Verify checksum (Linux: sha256sum, macOS: shasum)
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum -c "${ASSET}.sha256"
+        else
+          shasum -a 256 -c "${ASSET}.sha256"
+        fi
+        
+        tar -xzf "${ASSET}"
+        EXTRACT_DIR="${BASENAME}"
+        mkdir -p "${HOME}/.local/bin"
+        mv "${EXTRACT_DIR}/freo" "${HOME}/.local/bin/"
+        echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+        freo --version || true
+
+    - name: Run freo on added/modified files
+      if: ${{ steps.cf.outputs.added_files_count != '0' || steps.cf.outputs.modified_files_count != '0' }}
+      shell: bash
+      env:
+        ADDED_JSON: ${{ steps.cf.outputs.added_files }}
+        MODIFIED_JSON: ${{ steps.cf.outputs.modified_files }}
+        EXTRA_ARGS: ${{ inputs["extra-args"] }}
+      run: |
+        set -euo pipefail
+        echo "Running: freo ${EXTRA_ARGS} --changed-files-json \"${ADDED_JSON}\" --changed-files-json \"${MODIFIED_JSON}\""
+        freo ${EXTRA_ARGS} --changed-files-json "${ADDED_JSON}" --changed-files-json "${MODIFIED_JSON}"
