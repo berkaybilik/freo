@@ -7,7 +7,7 @@ inputs:
   repo:
     description: "Owner/repo where freo releases live (e.g., your-org/freo)"
     required: true
-  extra-args:
+  extra_args:
     description: "Extra CLI flags for freo (optional)"
     required: false
     default: ""
@@ -77,7 +77,7 @@ runs:
       env:
         ADDED_JSON: ${{ steps.cf.outputs.added_files }}
         MODIFIED_JSON: ${{ steps.cf.outputs.modified_files }}
-        EXTRA_ARGS: ${{ inputs["extra-args"] }}
+        EXTRA_ARGS: ${{ inputs.extra_args }}
       run: |
         set -euo pipefail
         echo "Running: freo ${EXTRA_ARGS} --changed-files-json \"${ADDED_JSON}\" --changed-files-json \"${MODIFIED_JSON}\""
