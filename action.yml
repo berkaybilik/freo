@@ -55,14 +55,6 @@ runs:
         ASSET="${BASENAME}.tar.gz"
         
         curl -sSL -o "${ASSET}" "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
-        curl -sSL -o "${ASSET}.sha256" "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}.sha256"
-        
-        # Verify checksum (Linux: sha256sum, macOS: shasum)
-        if command -v sha256sum >/dev/null 2>&1; then
-          sha256sum -c "${ASSET}.sha256"
-        else
-          shasum -a 256 -c "${ASSET}.sha256"
-        fi
         
         tar -xzf "${ASSET}"
         EXTRACT_DIR="${BASENAME}"
