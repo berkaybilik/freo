@@ -11,6 +11,7 @@ struct PathsFromJson {
     pub paths: Vec<PathBuf>,
 }
 
+// FREO: Are you going to remove this?
 impl FromStr for PathsFromJson {
     type Err = String;
 
