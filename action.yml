@@ -61,14 +61,13 @@ runs:
         mkdir -p "${HOME}/.local/bin"
         mv "${EXTRACT_DIR}/freo" "${HOME}/.local/bin/"
         echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
-        freo --version || true
 
     - name: Run freo on added/modified files
       if: ${{ steps.cf.outputs.added_files_count != '0' || steps.cf.outputs.modified_files_count != '0' }}
       shell: bash
       env:
-        ADDED_JSON: ${{ steps.cf.outputs.added_files }}
-        MODIFIED_JSON: ${{ steps.cf.outputs.modified_files }}
+        ADDED_JSON: ${{ steps.cf.outputs.added_files_json }}
+        MODIFIED_JSON: ${{ steps.cf.outputs.modified_files_json }}
         EXTRA_ARGS: ${{ inputs.extra_args }}
       run: |
         set -euo pipefail
