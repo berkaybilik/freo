@@ -1,0 +1,51 @@
+name: Run freo on PR tag label
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  freo-on-pr:
+    name: freo (label ${{ github.event.label.name }})
+    # Only run when the added label looks like a version tag (e.g., v1, v1.2.3)
+    if: startsWith(github.event.label.name, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head branch
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      # Use the local composite action (action.yml) which downloads the freo binary
+      # from the repository releases produced by .github/workflows/release.yml
+      - name: Run freo via composite action
+        uses: ./
+        with:
+          version: ${{ github.event.label.name }}         # e.g. v1.2.3
+          repo: ${{ github.repository }}                 # where releases (freo binaries) live
+          extra_args: ""                                 # optional extra flags to freo
+
+      - name: Commit and push changes (if any)
+        env:
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore(freo): apply changes"
+            git push origin "HEAD:${PR_BRANCH}"
+          else
+            echo "No changes to commit."
+          fi
+
+
