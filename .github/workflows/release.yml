@@ -38,6 +38,7 @@ jobs:
 
       # freo-<tag>-<target>.(tar.gz|zip)
       - name: Package
+        id: pkg
         shell: bash
         run: |
           set -euo pipefail
@@ -49,15 +50,11 @@ jobs:
           mkdir -p "${PKGDIR}"
           cp "${OUTDIR}/${BIN_NAME}" "${PKGDIR}/"
           tar -czf "${PKGDIR}.tar.gz" "${PKGDIR}"
-          echo "${PKGDIR}.tar.gz" > pkgname.txt          
-
-      - name: SHA256
-        run: shasum -a 256 "$(cat pkgname.txt)" > "$(cat pkgname.txt).sha256"
+          echo "asset=${PKGDIR}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            $(cat pkgname.txt)
-            $(cat pkgname.txt).sha256
+            ${{ steps.pkg.outputs.asset }}
