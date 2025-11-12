@@ -13,6 +13,7 @@ pub struct AppConfig {
     keyword: String,
 }
 
+// FREO: Get rid of me!!!
 #[derive(Deserialize)]
 struct AppConfigRaw {
     keyword: Option<String>,
