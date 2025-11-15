@@ -42,6 +42,7 @@ runs:
       env:
         VERSION: ${{ inputs.version }}
         REPO: ${{ inputs.repo }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
 
@@ -61,9 +62,30 @@ runs:
         TARGET="${ARCH}-${OS_TRIPLE}"
         BASENAME="freo-${VERSION}-${TARGET}"
         ASSET="${BASENAME}.tar.gz"
-        
-        curl -sSL -o "${ASSET}" "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
-        
+
+        if [[ -z "${GH_TOKEN:-}" ]]; then
+          echo "GH_TOKEN is required to download release assets."
+          exit 1
+        fi
+
+        RELEASE_JSON="$(curl -sSfL \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${GH_TOKEN}" \
+          "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")"
+
+        ASSET_URL="$(printf '%s' "${RELEASE_JSON}" | jq -r --arg NAME "${ASSET}" '.assets[] | select(.name == $NAME) | .url')"
+
+        if [[ -z "${ASSET_URL}" || "${ASSET_URL}" == "null" ]]; then
+          echo "Could not find asset ${ASSET} in release ${VERSION}."
+          exit 1
+        fi
+
+        curl -sSfL \
+          -H "Accept: application/octet-stream" \
+          -H "Authorization: Bearer ${GH_TOKEN}" \
+          -o "${ASSET}" \
+          "${ASSET_URL}"
+
         tar -xzf "${ASSET}"
         EXTRACT_DIR="${BASENAME}"
         mkdir -p "${HOME}/.local/bin"

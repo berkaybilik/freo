@@ -30,7 +30,6 @@ jobs:
         with:
           version: ${{ github.event.label.name }}         # e.g. v1.2.3
           repo: ${{ github.repository }}                 # where releases (freo binaries) live
-          extra_args: ""                                 # optional extra flags to freo
 
       - name: Commit and push changes (if any)
         env:
