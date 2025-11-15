@@ -10,21 +10,33 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v5
-
     - name: Detect changed files
-      id: cf
-      uses: tj-actions/changed-files@v47
-      with:
-        escape_json: false
+      id: diff
+      shell: bash
+      run: |
+        set -euo pipefail
+        git fetch --no-tags origin "${GITHUB_BASE_REF}"
+        DIFF_BASE="$(git merge-base HEAD "origin/${GITHUB_BASE_REF}")"
+
+        mapfile -t CHANGED_FILES < <(git diff --name-only --diff-filter=AM "${DIFF_BASE}" HEAD)
+
+        if [[ "${#CHANGED_FILES[@]}" -eq 0 ]]; then
+          echo "No added or modified files detected."
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        printf '%s\n' "${CHANGED_FILES[@]}" > changed-files.txt
+        echo "Detected ${#CHANGED_FILES[@]} file(s) to lint."
+        echo "has_changes=true" >> "$GITHUB_OUTPUT"
 
     - name: No changed files
-      if: ${{ steps.cf.outputs.added_files_count == '0' && steps.cf.outputs.modified_files_count == '0' }}
+      if: ${{ steps.diff.outputs.has_changes == 'false' }}
       shell: bash
       run: echo "No changed files detected; skipping freo."
 
     - name: Download & install freo
-      if: ${{ steps.cf.outputs.added_files_count != '0' || steps.cf.outputs.modified_files_count != '0' }}
+      if: ${{ steps.diff.outputs.has_changes == 'true' }}
       id: install
       shell: bash
       env:
@@ -59,12 +71,10 @@ runs:
         echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
     - name: Run freo on added/modified files
-      if: ${{ steps.cf.outputs.added_files_count != '0' || steps.cf.outputs.modified_files_count != '0' }}
+      if: ${{ steps.diff.outputs.has_changes == 'true' }}
       shell: bash
-      env:
-        ADDED_JSON: ${{ steps.cf.outputs.added_files_json }}
-        MODIFIED_JSON: ${{ steps.cf.outputs.modified_files_json }}
       run: |
         set -euo pipefail
-        echo "Running: freo --changed-files-json \"${ADDED_JSON}\" --changed-files-json \"${MODIFIED_JSON}\""
-        freo --changed-files-json "${ADDED_JSON}" --changed-files-json "${MODIFIED_JSON}"
+        mapfile -t CHANGED_FILES < changed-files.txt
+        echo "Running: freo -f ${CHANGED_FILES[*]}"
+        freo -f "${CHANGED_FILES[@]}"
