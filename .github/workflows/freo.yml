@@ -11,8 +11,7 @@ permissions:
 jobs:
   freo-on-pr:
     name: freo (label ${{ github.event.label.name }})
-    # Only run when the added label looks like a version tag (e.g., v1, v1.2.3)
-    if: startsWith(github.event.label.name, 'v')
+    if: github.event.label.name == 'freo'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR head branch
@@ -23,13 +22,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      # Use the local composite action (action.yml) which downloads the freo binary
-      # from the repository releases produced by .github/workflows/release.yml
-      - name: Run freo via composite action
-        uses: ./
-        with:
-          version: ${{ github.event.label.name }}         # e.g. v1.2.3
-          repo: ${{ github.repository }}                 # where releases (freo binaries) live
+      # Use the published freo composite action.
+      - name: Run freo via published action
+        uses: berkaybilik/freo@v0.0.6
 
       - name: Commit and push changes (if any)
         env:

@@ -1,12 +1,5 @@
-name: "freo linter"
-description: "Run freo on changed files only"
-inputs:
-  version:
-    description: "Release tag of freo to download (e.g., v1.2.3 or v1)"
-    required: true
-  repo:
-    description: "Owner/repo where freo releases live (e.g., your-org/freo)"
-    required: true
+name: "freo - for the reviewers eyes only"
+description: "Run freo"
 runs:
   using: "composite"
   steps:
@@ -42,9 +35,8 @@ runs:
       id: install
       shell: bash
       env:
-        VERSION: ${{ inputs.version }}
-        REPO: ${{ inputs.repo }}
-        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ github.action_ref }}
+        REPO: berkaybilik/freo
       run: |
         set -euo pipefail
 
@@ -67,28 +59,18 @@ runs:
         WORK_DIR="$(mktemp -d "${RUNNER_TEMP}/freo.XXXXXX")"
         ASSET_PATH="${WORK_DIR}/${ASSET}"
 
-        if [[ -z "${GH_TOKEN:-}" ]]; then
-          echo "GH_TOKEN is required to download release assets."
+        if [[ -z "${VERSION:-}" ]]; then
+          echo "VERSION could not be determined. Invoke this action via a tag, e.g., uses: berkaybilik/freo@v1.2.3."
           exit 1
         fi
 
-        RELEASE_JSON="$(curl -sSfL \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${GH_TOKEN}" \
-          "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}")"
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
 
-        ASSET_URL="$(printf '%s' "${RELEASE_JSON}" | jq -r --arg NAME "${ASSET}" '.assets[] | select(.name == $NAME) | .url')"
-
-        if [[ -z "${ASSET_URL}" || "${ASSET_URL}" == "null" ]]; then
-          echo "Could not find asset ${ASSET} in release ${VERSION}."
+        echo "Downloading ${ASSET} from ${DOWNLOAD_URL}"
+        if ! curl -sSfL -o "${ASSET_PATH}" "${DOWNLOAD_URL}"; then
+          echo "Failed to download ${ASSET} from ${DOWNLOAD_URL}"
           exit 1
         fi
-
-        curl -sSfL \
-          -H "Accept: application/octet-stream" \
-          -H "Authorization: Bearer ${GH_TOKEN}" \
-          -o "${ASSET_PATH}" \
-          "${ASSET_URL}"
 
         tar -xzf "${ASSET_PATH}" -C "${WORK_DIR}"
         EXTRACT_DIR="${WORK_DIR}/${BASENAME}"
