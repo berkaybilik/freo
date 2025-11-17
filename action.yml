@@ -26,7 +26,9 @@ runs:
           exit 0
         fi
 
-        printf '%s\n' "${CHANGED_FILES[@]}" > changed-files.txt
+        CHANGED_FILES_PATH="${RUNNER_TEMP}/freo-changed-files.txt"
+        printf '%s\n' "${CHANGED_FILES[@]}" > "${CHANGED_FILES_PATH}"
+        echo "CHANGED_FILES_PATH=${CHANGED_FILES_PATH}" >> "$GITHUB_ENV"
         echo "Detected ${#CHANGED_FILES[@]} file(s) to lint."
         echo "has_changes=true" >> "$GITHUB_OUTPUT"
 
@@ -62,6 +64,8 @@ runs:
         TARGET="${ARCH}-${OS_TRIPLE}"
         BASENAME="freo-${VERSION}-${TARGET}"
         ASSET="${BASENAME}.tar.gz"
+        WORK_DIR="$(mktemp -d "${RUNNER_TEMP}/freo.XXXXXX")"
+        ASSET_PATH="${WORK_DIR}/${ASSET}"
 
         if [[ -z "${GH_TOKEN:-}" ]]; then
           echo "GH_TOKEN is required to download release assets."
@@ -83,20 +87,19 @@ runs:
         curl -sSfL \
           -H "Accept: application/octet-stream" \
           -H "Authorization: Bearer ${GH_TOKEN}" \
-          -o "${ASSET}" \
+          -o "${ASSET_PATH}" \
           "${ASSET_URL}"
 
-        tar -xzf "${ASSET}"
-        EXTRACT_DIR="${BASENAME}"
-        mkdir -p "${HOME}/.local/bin"
-        mv "${EXTRACT_DIR}/freo" "${HOME}/.local/bin/"
-        echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+        tar -xzf "${ASSET_PATH}" -C "${WORK_DIR}"
+        EXTRACT_DIR="${WORK_DIR}/${BASENAME}"
+        FREO_BIN="${EXTRACT_DIR}/freo"
+        echo "FREO_BIN=${FREO_BIN}" >> "$GITHUB_ENV"
 
     - name: Run freo on added/modified files
       if: ${{ steps.diff.outputs.has_changes == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        mapfile -t CHANGED_FILES < changed-files.txt
-        echo "Running: freo -f ${CHANGED_FILES[*]}"
-        freo -f "${CHANGED_FILES[@]}"
+        mapfile -t CHANGED_FILES < "${CHANGED_FILES_PATH}"
+        echo "Running: ${FREO_BIN} -f ${CHANGED_FILES[*]}"
+        "${FREO_BIN}" -f "${CHANGED_FILES[@]}"
