@@ -1,3 +1,6 @@
 {
-    "keyword": "FREO"
+    "keyword": "FREO",
+    "comment_map": {
+        "txt": "//"
+    }
 }

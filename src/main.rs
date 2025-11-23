@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,13 +14,6 @@ struct Cli {
 
     #[arg(short = 'c', long = "config")]
     config: Option<String>,
-
-    #[arg(
-        long = "comment-map",
-        value_name = "FILE",
-        help = "JSON file of {\"ext\": \"token\"} pairs"
-    )]
-    comment_map: Option<String>,
 }
 
 fn main() {
@@ -41,21 +33,11 @@ fn main() {
         Ok(cfg) => cfg,
         Err(err) => {
             eprintln!("Warning: {err}");
-            AppConfig::new(None)
+            AppConfig::new(None, None)
         }
     };
 
-    let comment_map = cli
-        .comment_map
-        .as_deref()
-        .map(load_comment_map)
-        .transpose()
-        .unwrap_or_else(|err| {
-            eprintln!("Error: {err}");
-            std::process::exit(3);
-        });
-
-    let resolver = CommentTokenResolver::new(comment_map);
+    let resolver = CommentTokenResolver::new(config.comment_map().cloned());
 
     freo::run(&config, &cli.files, &resolver);
 }
@@ -92,13 +74,4 @@ fn read_config(config_path: &str) -> Result<AppConfig, String> {
         .map_err(|e| format!("Failed to parse JSON in {config_path}: {e}"))?;
 
     Ok(cfg)
-}
-
-fn load_comment_map(path: &str) -> Result<HashMap<String, String>, String> {
-    let contents =
-        fs::read_to_string(path).map_err(|e| format!("Failed to read comment map {path}: {e}"))?;
-    let map: HashMap<String, String> = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse JSON in {path}: {e}"))?;
-
-    Ok(map)
 }
