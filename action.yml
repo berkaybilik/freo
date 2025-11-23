@@ -1,39 +1,42 @@
-name: "freo linter"
-description: "Run freo on changed files only"
-inputs:
-  version:
-    description: "Release tag of freo to download (e.g., v1.2.3 or v1)"
-    required: true
-  repo:
-    description: "Owner/repo where freo releases live (e.g., your-org/freo)"
-    required: true
-  extra_args:
-    description: "Extra CLI flags for freo (optional)"
-    required: false
-    default: ""
+name: "freo - for the reviewers eyes only"
+description: "Run freo"
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v5
-
     - name: Detect changed files
-      id: cf
-      uses: tj-actions/changed-files@v47
-      with:
-        escape_json: false
+      id: diff
+      shell: bash
+      run: |
+        set -euo pipefail
+        git fetch --no-tags origin "${GITHUB_BASE_REF}"
+        DIFF_BASE="$(git merge-base HEAD "origin/${GITHUB_BASE_REF}")"
+
+        mapfile -t CHANGED_FILES < <(git diff --name-only --diff-filter=AM "${DIFF_BASE}" HEAD)
+
+        if [[ "${#CHANGED_FILES[@]}" -eq 0 ]]; then
+          echo "No added or modified files detected."
+          echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        CHANGED_FILES_PATH="${RUNNER_TEMP}/freo-changed-files.txt"
+        printf '%s\n' "${CHANGED_FILES[@]}" > "${CHANGED_FILES_PATH}"
+        echo "CHANGED_FILES_PATH=${CHANGED_FILES_PATH}" >> "$GITHUB_ENV"
+        echo "Detected ${#CHANGED_FILES[@]} file(s) to lint."
+        echo "has_changes=true" >> "$GITHUB_OUTPUT"
 
     - name: No changed files
-      if: ${{ steps.cf.outputs.added_files_count == '0' && steps.cf.outputs.modified_files_count == '0' }}
+      if: ${{ steps.diff.outputs.has_changes == 'false' }}
       shell: bash
       run: echo "No changed files detected; skipping freo."
 
     - name: Download & install freo
-      if: ${{ steps.cf.outputs.added_files_count != '0' || steps.cf.outputs.modified_files_count != '0' }}
+      if: ${{ steps.diff.outputs.has_changes == 'true' }}
       id: install
       shell: bash
       env:
-        VERSION: ${{ inputs.version }}
-        REPO: ${{ inputs.repo }}
+        VERSION: ${{ github.action_ref }}
+        REPO: berkaybilik/freo
       run: |
         set -euo pipefail
 
@@ -53,23 +56,32 @@ runs:
         TARGET="${ARCH}-${OS_TRIPLE}"
         BASENAME="freo-${VERSION}-${TARGET}"
         ASSET="${BASENAME}.tar.gz"
-        
-        curl -sSL -o "${ASSET}" "https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
-        
-        tar -xzf "${ASSET}"
-        EXTRACT_DIR="${BASENAME}"
-        mkdir -p "${HOME}/.local/bin"
-        mv "${EXTRACT_DIR}/freo" "${HOME}/.local/bin/"
-        echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+        WORK_DIR="$(mktemp -d "${RUNNER_TEMP}/freo.XXXXXX")"
+        ASSET_PATH="${WORK_DIR}/${ASSET}"
+
+        if [[ -z "${VERSION:-}" ]]; then
+          echo "VERSION could not be determined. Invoke this action via a tag, e.g., uses: berkaybilik/freo@v1.2.3."
+          exit 1
+        fi
+
+        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
+
+        echo "Downloading ${ASSET} from ${DOWNLOAD_URL}"
+        if ! curl -sSfL -o "${ASSET_PATH}" "${DOWNLOAD_URL}"; then
+          echo "Failed to download ${ASSET} from ${DOWNLOAD_URL}"
+          exit 1
+        fi
+
+        tar -xzf "${ASSET_PATH}" -C "${WORK_DIR}"
+        EXTRACT_DIR="${WORK_DIR}/${BASENAME}"
+        FREO_BIN="${EXTRACT_DIR}/freo"
+        echo "FREO_BIN=${FREO_BIN}" >> "$GITHUB_ENV"
 
     - name: Run freo on added/modified files
-      if: ${{ steps.cf.outputs.added_files_count != '0' || steps.cf.outputs.modified_files_count != '0' }}
+      if: ${{ steps.diff.outputs.has_changes == 'true' }}
       shell: bash
-      env:
-        ADDED_JSON: ${{ steps.cf.outputs.added_files_json }}
-        MODIFIED_JSON: ${{ steps.cf.outputs.modified_files_json }}
-        EXTRA_ARGS: ${{ inputs.extra_args }}
       run: |
         set -euo pipefail
-        echo "Running: freo ${EXTRA_ARGS} --changed-files-json \"${ADDED_JSON}\" --changed-files-json \"${MODIFIED_JSON}\""
-        freo ${EXTRA_ARGS} --changed-files-json "${ADDED_JSON}" --changed-files-json "${MODIFIED_JSON}"
+        mapfile -t CHANGED_FILES < "${CHANGED_FILES_PATH}"
+        echo "Running: ${FREO_BIN} -f ${CHANGED_FILES[*]}"
+        "${FREO_BIN}" -f "${CHANGED_FILES[@]}"
