@@ -37,13 +37,12 @@ pub fn run(config: &AppConfig, file_paths: &Vec<std::path::PathBuf>) {
         config.keyword()
     );
 
-    const COMMENT_TOKEN: &str = "//";
-
+    const COMMENT_START: &str = "//";
     println!("Finding matching lines...");
 
     for file_path in file_paths {
         println!("Processing file: {}", file_path.display());
-        remove_matching_lines(COMMENT_TOKEN, config.keyword(), file_path);
+        remove_matching_lines(COMMENT_START, config.keyword(), file_path);
     }
 }
 
@@ -81,9 +80,16 @@ fn remove_matching_lines(comment_token: &str, keyword: &str, file_path: &std::pa
     let mut pending_line: Option<String> = None;
     for line in reader.lines() {
         let line = line.unwrap();
-        if !pattern.is_match(&line) {
-            if let Some(prev) = pending_line.replace(line) {
-                writeln!(writer, "{}", prev).unwrap();
+        match strip_keyword_comment(line, &pattern) {
+            Some(processed_line) => {
+                if let Some(prev) = pending_line.replace(processed_line) {
+                    writeln!(writer, "{}", prev).unwrap();
+                }
+            }
+            None => {
+                if let Some(prev) = pending_line.take() {
+                    writeln!(writer, "{}", prev).unwrap();
+                }
             }
         }
     }
@@ -112,4 +118,17 @@ fn remove_matching_lines(comment_token: &str, keyword: &str, file_path: &std::pa
 
     // Durability: fsync the parent directory to persist the rename
     if let Ok(dir) = File::open(parent) { let _ = dir.sync_all(); }
+}
+
+fn strip_keyword_comment(mut line: String, pattern: &Regex) -> Option<String> {
+    if let Some(mat) = pattern.find(&line) {
+        line.truncate(mat.start());
+        let trimmed_len = line.trim_end().len();
+        line.truncate(trimmed_len);
+
+        if line.trim().is_empty() {
+            return None;
+        }
+    }
+    Some(line)
 }
