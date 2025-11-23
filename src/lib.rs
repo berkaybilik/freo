@@ -1,11 +1,42 @@
-use std::{fs::File, io::{BufRead, BufReader, BufWriter, Write}};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader, BufWriter, Write},
+    path::Path,
+};
 use tempfile::NamedTempFile;
 
-use serde::Deserialize;
 use regex::{Regex, RegexBuilder};
+use serde::Deserialize;
 
 const DEFAULT_KEYWORD: &str = "FREO";
+const DEFAULT_COMMENT_TOKENS: &[(&str, &str)] = &[
+    ("c", "//"),
+    ("cc", "//"),
+    ("cpp", "//"),
+    ("cs", "//"),
+    ("go", "//"),
+    ("h", "//"),
+    ("hpp", "//"),
+    ("java", "//"),
+    ("js", "//"),
+    ("jsx", "//"),
+    ("kt", "//"),
+    ("rs", "//"),
+    ("swift", "//"),
+    ("ts", "//"),
+    ("tsx", "//"),
+    ("py", "#"),
+    ("rb", "#"),
+    ("sh", "#"),
+    ("bash", "#"),
+    ("toml", "#"),
+    ("yaml", "#"),
+    ("yml", "#"),
+    ("ini", "#"),
+    ("sql", "--"),
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(from = "AppConfigRaw")]
@@ -19,7 +50,9 @@ struct AppConfigRaw {
 }
 
 impl From<AppConfigRaw> for AppConfig {
-    fn from(raw: AppConfigRaw) -> Self { AppConfig::new(raw.keyword) }
+    fn from(raw: AppConfigRaw) -> Self {
+        AppConfig::new(raw.keyword)
+    }
 }
 
 impl AppConfig {
@@ -28,22 +61,78 @@ impl AppConfig {
         Self { keyword }
     }
 
-    pub fn keyword(&self) -> &str { &self.keyword }
+    pub fn keyword(&self) -> &str {
+        &self.keyword
+    }
 }
 
-pub fn run(config: &AppConfig, file_paths: &Vec<std::path::PathBuf>) {
+pub fn run(config: &AppConfig, file_paths: &[std::path::PathBuf], resolver: &CommentTokenResolver) {
     println!(
         "Running for the reviewers eyes only with keyword: {}",
         config.keyword()
     );
 
-    const COMMENT_START: &str = "//";
     println!("Finding matching lines...");
 
     for file_path in file_paths {
         println!("Processing file: {}", file_path.display());
-        remove_matching_lines(COMMENT_START, config.keyword(), file_path);
+        let Some(token) = resolver.token_for(file_path) else {
+            println!(
+                "Skipping {}: no comment token mapping for extension",
+                file_path.display()
+            );
+            continue;
+        };
+        remove_matching_lines(token, config.keyword(), file_path);
     }
+}
+
+#[derive(Debug)]
+pub struct CommentTokenResolver {
+    lookup: HashMap<String, String>,
+}
+
+impl Default for CommentTokenResolver {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+impl CommentTokenResolver {
+    pub fn new(custom_mappings: Option<HashMap<String, String>>) -> Self {
+        let mut lookup = HashMap::new();
+        for (ext, token) in DEFAULT_COMMENT_TOKENS {
+            lookup.insert((*ext).to_ascii_lowercase(), (*token).to_string());
+        }
+
+        if let Some(custom) = custom_mappings {
+            for (key, value) in custom {
+                let normalized_token = value.trim().to_string();
+                if normalized_token.is_empty() {
+                    continue;
+                }
+                lookup.insert(normalize_extension_key(&key), normalized_token);
+            }
+        }
+
+        Self { lookup }
+    }
+
+    pub fn token_for(&self, file_path: &Path) -> Option<&str> {
+        if let Some(ext) = file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+        {
+            return self.lookup.get(&ext).map(|token| token.as_str());
+        }
+
+        None
+    }
+}
+
+fn normalize_extension_key(value: &str) -> String {
+    value.trim().trim_start_matches('.').to_ascii_lowercase()
 }
 
 fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
@@ -62,13 +151,17 @@ fn remove_matching_lines(comment_token: &str, keyword: &str, file_path: &std::pa
     let temp_file = NamedTempFile::new_in(parent).unwrap();
 
     if let Err(e) = File::create(&temp_file.path()) {
-        eprintln!("Error: failed to create temp file in {}: {}", parent.display(), e);
+        eprintln!(
+            "Error: failed to create temp file in {}: {}",
+            parent.display(),
+            e
+        );
         return;
     }
 
     let pattern: Regex = build_keyword_comment_pattern(comment_token, keyword);
-    
-    let reader = BufReader::new(File::open(file_path).unwrap()); 
+
+    let reader = BufReader::new(File::open(file_path).unwrap());
     let mut writer = BufWriter::new(temp_file.as_file());
 
     // Pending line is used to handle the case where the last line does not match and needs to be written to the file
@@ -106,7 +199,7 @@ fn remove_matching_lines(comment_token: &str, keyword: &str, file_path: &std::pa
     if let Ok(orig_meta) = std::fs::metadata(file_path) {
         let mut perms = orig_meta.permissions();
         perms.set_mode(orig_meta.mode());
-        let _ = std::fs::set_permissions(temp_file.path(), perms); 
+        let _ = std::fs::set_permissions(temp_file.path(), perms);
     }
 
     // Ensure all data and metadata are durably written to the temp file
@@ -117,7 +210,9 @@ fn remove_matching_lines(comment_token: &str, keyword: &str, file_path: &std::pa
     temp_file.persist(file_path).unwrap();
 
     // Durability: fsync the parent directory to persist the rename
-    if let Ok(dir) = File::open(parent) { let _ = dir.sync_all(); }
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
 }
 
 fn strip_keyword_comment(mut line: String, pattern: &Regex) -> Option<String> {
