@@ -24,7 +24,7 @@ jobs:
 
       # Use the published freo composite action.
       - name: Run freo via published action
-        uses: berkaybilik/freo@v0.0.7
+        uses: berkaybilik/freo@v0.0.8
         with:
           config: freo.json
 
