@@ -25,6 +25,8 @@ jobs:
       # Use the published freo composite action.
       - name: Run freo via published action
         uses: berkaybilik/freo@v0.0.7
+        with:
+          config: freo.json
 
       - name: Commit and push changes (if any)
         env:

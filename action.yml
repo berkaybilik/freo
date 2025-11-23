@@ -1,5 +1,9 @@
 name: "freo - for the reviewers eyes only"
 description: "Run freo"
+inputs:
+  config:
+    description: "Optional path to a freo configuration file"
+    required: false
 runs:
   using: "composite"
   steps:
@@ -83,5 +87,10 @@ runs:
       run: |
         set -euo pipefail
         mapfile -t CHANGED_FILES < "${CHANGED_FILES_PATH}"
-        echo "Running: ${FREO_BIN} -f ${CHANGED_FILES[*]}"
-        "${FREO_BIN}" -f "${CHANGED_FILES[@]}"
+        CONFIG_PATH="${{ inputs.config }}"
+        CONFIG_ARGS=()
+        if [[ -n "${CONFIG_PATH}" ]]; then
+          CONFIG_ARGS=(-c "${CONFIG_PATH}")
+        fi
+        echo "Running: ${FREO_BIN} ${CONFIG_ARGS[*]} -f ${CHANGED_FILES[*]}"
+        "${FREO_BIN}" "${CONFIG_ARGS[@]}" -f "${CHANGED_FILES[@]}"
