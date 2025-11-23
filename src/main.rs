@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use freo::AppConfig;
+use freo::{AppConfig, CommentTokenResolver};
 
 #[derive(Parser, Debug)]
 #[command(name = "freo")]
@@ -33,11 +33,13 @@ fn main() {
         Ok(cfg) => cfg,
         Err(err) => {
             eprintln!("Warning: {err}");
-            AppConfig::new(None)
+            AppConfig::new(None, None)
         }
     };
-    
-    freo::run(&config, &cli.files);
+
+    let resolver = CommentTokenResolver::new(config.comment_map().cloned());
+
+    freo::run(&config, &cli.files, &resolver);
 }
 
 fn default_config_path() -> PathBuf {
@@ -65,8 +67,8 @@ fn read_config(config_path: &str) -> Result<AppConfig, String> {
         return Err(format!("Config not found at {config_path}"));
     }
 
-    let contents = fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {config_path}: {e}"))?;
+    let contents =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read {config_path}: {e}"))?;
 
     let cfg: AppConfig = serde_json::from_str(&contents)
         .map_err(|e| format!("Failed to parse JSON in {config_path}: {e}"))?;
