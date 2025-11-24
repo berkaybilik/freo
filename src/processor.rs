@@ -48,30 +48,14 @@ fn remove_matching_comments(comment_token: &str, keyword: &str, file_path: &Path
     let reader = BufReader::new(File::open(file_path).unwrap());
     let mut writer = BufWriter::new(temp_file.as_file());
 
-    // Pending line is used to handle the case where the last line does not match and needs to be written to the file
-    // without a newline character. Example case: Suppose the file ends with:
-    // a
-    // If we just did writeln!("a") then, in the new file it would be:
-    // a\n
-    // We don't want this because we have to preserve all original data apart from the lines that match the pattern
-    let mut pending_line: Option<String> = None;
     for line in reader.lines() {
         let line = line.unwrap();
         match strip_keyword_comment(line, &pattern) {
             Some(processed_line) => {
-                if let Some(prev) = pending_line.replace(processed_line) {
-                    writeln!(writer, "{}", prev).unwrap();
-                }
+                writeln!(writer, "{}", processed_line).unwrap();
             }
-            None => {
-                if let Some(prev) = pending_line.take() {
-                    writeln!(writer, "{}", prev).unwrap();
-                }
-            }
+            None => {}
         }
-    }
-    if let Some(last) = pending_line {
-        write!(writer, "{}", last).unwrap();
     }
 
     // Flush buffered writes before syncing to disk
