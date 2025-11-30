@@ -1,3 +1,4 @@
+use std::io;
 use std::path::PathBuf;
 
 pub mod comment;
@@ -7,7 +8,11 @@ pub mod processor;
 pub use comment::CommentTokenResolver;
 pub use config::AppConfig;
 
-pub fn run(config: &AppConfig, file_paths: &[PathBuf], resolver: &CommentTokenResolver) {
+pub fn run(
+    config: &AppConfig,
+    file_paths: &[PathBuf],
+    resolver: &CommentTokenResolver,
+) -> io::Result<()> {
     println!(
         "Running for the reviewers eyes only with keyword: {}",
         config.keyword()
@@ -24,6 +29,8 @@ pub fn run(config: &AppConfig, file_paths: &[PathBuf], resolver: &CommentTokenRe
             );
             continue;
         };
-        processor::remove_matching_comments(token, config.keyword(), file_path.as_path());
+        processor::remove_matching_comments(token, config.keyword(), file_path.as_path())?;
     }
+
+    Ok(())
 }
