@@ -1,36 +1,12 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use regex::{Regex, RegexBuilder};
 use tempfile::NamedTempFile;
 
-use crate::comment::CommentTokenResolver;
-use crate::config::AppConfig;
-
-pub fn run(config: &AppConfig, file_paths: &[PathBuf], resolver: &CommentTokenResolver) {
-    println!(
-        "Running for the reviewers eyes only with keyword: {}",
-        config.keyword()
-    );
-
-    println!("Finding matching lines...");
-
-    for file_path in file_paths {
-        println!("Processing file: {}", file_path.display());
-        let Some(token) = resolver.token_for(file_path) else {
-            println!(
-                "Skipping {}: no comment token mapping for extension",
-                file_path.display()
-            );
-            continue;
-        };
-        remove_matching_comments(token, config.keyword(), file_path.as_path());
-    }
-}
-
-fn remove_matching_comments(comment_token: &str, keyword: &str, file_path: &Path) {
+pub fn remove_matching_comments(comment_token: &str, keyword: &str, file_path: &Path) {
     let parent = file_path.parent().unwrap_or(std::path::Path::new("."));
     let temp_file = NamedTempFile::new_in(parent).unwrap();
 
