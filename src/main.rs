@@ -39,7 +39,10 @@ fn main() {
 
     let resolver = CommentTokenResolver::new(config.comment_map().cloned());
 
-    freo::run(&config, &cli.files, &resolver);
+    if let Err(err) = freo::run(&config, &cli.files, &resolver) {
+        eprintln!("Processing failed: {err}");
+        std::process::exit(1);
+    }
 }
 
 fn default_config_path() -> PathBuf {
