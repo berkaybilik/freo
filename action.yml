@@ -34,9 +34,8 @@ runs:
       shell: bash
       run: echo "No changed files detected; skipping freo."
 
-    - name: Download & install freo
+    - name: Download freo artifact
       if: ${{ steps.diff.outputs.has_changes == 'true' }}
-      id: install
       shell: bash
       env:
         VERSION: ${{ github.action_ref }}
@@ -76,6 +75,36 @@ runs:
           exit 1
         fi
 
+        {
+          echo "WORK_DIR=${WORK_DIR}"
+          echo "ASSET_PATH=${ASSET_PATH}"
+          echo "BASENAME=${BASENAME}"
+        } >> "$GITHUB_ENV"
+
+    - name: Verify artifact attestation
+      if: ${{ steps.diff.outputs.has_changes == 'true' }}
+      shell: bash
+      env:
+        VERSION: ${{ github.action_ref }}
+        REPO: berkaybilik/freo
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+        if [[ -z "${GH_TOKEN}" ]]; then
+          echo "GH_TOKEN/GITHUB_TOKEN not set; cannot verify attestation"
+          exit 1
+        fi
+        gh attestation verify "${ASSET_PATH}" \
+          -R "${REPO}" \
+          --source-ref "refs/tags/${VERSION}"
+
+    - name: Install freo
+      if: ${{ steps.diff.outputs.has_changes == 'true' }}
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
         tar -xzf "${ASSET_PATH}" -C "${WORK_DIR}"
         EXTRACT_DIR="${WORK_DIR}/${BASENAME}"
         FREO_BIN="${EXTRACT_DIR}/freo"

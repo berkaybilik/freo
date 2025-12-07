@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 jobs:
   build:
@@ -52,9 +54,46 @@ jobs:
           tar -czf "${PKGDIR}.tar.gz" "${PKGDIR}"
           echo "asset=${PKGDIR}.tar.gz" >> "$GITHUB_OUTPUT"
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Attest artifact provenance
+        uses: actions/attest-build-provenance@v3
         with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            ${{ steps.pkg.outputs.asset }}
+          subject-path: ${{ steps.pkg.outputs.asset }}
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.pkg.outputs.asset }}
+          path: ${{ steps.pkg.outputs.asset }}
+          retention-days: 1
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v6
+        with:
+          pattern: freo-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          files=(artifacts/**/*.tar.gz)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No artifacts found to release."
+            exit 1
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --notes "" \
+            "${files[@]}"
