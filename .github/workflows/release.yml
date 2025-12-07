@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 jobs:
   build:
@@ -52,9 +54,18 @@ jobs:
           tar -czf "${PKGDIR}.tar.gz" "${PKGDIR}"
           echo "asset=${PKGDIR}.tar.gz" >> "$GITHUB_OUTPUT"
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Attest artifact provenance
+        uses: actions/attest@v1
         with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            ${{ steps.pkg.outputs.asset }}
+          subject-path: ${{ steps.pkg.outputs.asset }}
+
+      - name: Create release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --notes "" \
+            "${{ steps.pkg.outputs.asset }}"
