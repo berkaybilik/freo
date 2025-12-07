@@ -11,9 +11,21 @@ permissions:
   id-token: write
 
 jobs:
+  run_tests:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: test
+        run: cargo test --all --locked
+
   build:
     name: Build ${{ matrix.os }} ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: run_tests
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +48,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       # freo-<tag>-<target>.(tar.gz|zip)
       - name: Package
