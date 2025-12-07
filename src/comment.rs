@@ -143,4 +143,23 @@ mod tests {
         assert_ne!(resolver.token_for(PathBuf::from("file.sql").as_path()), Some("F"));
         assert_ne!(resolver.token_for(PathBuf::from("file.sql.").as_path()), Some("F"));
     }
+
+    #[test]
+    fn comment_token_resolver_returns_none_for_paths_without_extension() {
+        let resolver = CommentTokenResolver::new(None);
+
+        assert_eq!(resolver.token_for(PathBuf::from("Makefile").as_path()), None);
+        assert_eq!(resolver.token_for(PathBuf::from("no_extension").as_path()), None);
+    }
+
+    #[test]
+    fn comment_token_resolver_ignores_empty_or_whitespace_custom_tokens() {
+        let resolver = CommentTokenResolver::new(Some(HashMap::from([
+            ("txt".to_string(), "   ".to_string()),
+            ("md".to_string(), "".to_string()),
+        ])));
+
+        assert_eq!(resolver.token_for(PathBuf::from("file.txt").as_path()), None);
+        assert_eq!(resolver.token_for(PathBuf::from("notes.md").as_path()), None);
+    }
 }

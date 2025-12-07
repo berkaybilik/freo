@@ -159,6 +159,22 @@ mod tests {
     }
 
     #[test]
+    fn strip_keyword_comment_ignores_keyword_inside_string_literal() {
+        let pattern = build_keyword_comment_pattern("//", "FREO");
+        let original = r#"println!("FREO: keep this string");"#.to_string();
+
+        let result = strip_keyword_comment(original.clone(), &pattern);
+
+        assert_eq!(result, Some(original));
+
+        let original = r#"//println!("FREO: keep this string");"#.to_string();
+
+        let result = strip_keyword_comment(original.clone(), &pattern);
+
+        assert_eq!(result, Some(original));
+    }
+
+    #[test]
     fn remove_matching_comments_from_stream_filters_matching_lines() {
         let input = Cursor::new(
             b"let x = 5; // FREO remove\nlet y = 6; // keep\n// FREO delete me\n".to_vec(),
