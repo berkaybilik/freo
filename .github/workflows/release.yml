@@ -11,13 +11,19 @@ permissions:
   id-token: write
 
 jobs:
-  run_tests:
-    name: Run Tests
+  audit_and_test:
+    name: Audit and Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: cargo audit
+        run: cargo audit --deny warnings
 
       - name: test
         run: cargo test --all --locked
@@ -25,7 +31,7 @@ jobs:
   build:
     name: Build ${{ matrix.os }} ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    needs: run_tests
+    needs: audit_and_test
     strategy:
       fail-fast: false
       matrix:
