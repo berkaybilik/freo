@@ -10,10 +10,24 @@ runs:
     - name: Detect changed files
       id: diff
       shell: bash
+      env:
+        PR_BASE: ${{ github.event.pull_request.base.ref }}
+        ENV_BASE: ${{ github.base_ref }}
       run: |
         set -euo pipefail
-        git fetch --no-tags origin "${GITHUB_BASE_REF}"
-        DIFF_BASE="$(git merge-base HEAD "origin/${GITHUB_BASE_REF}")"
+
+        TARGET_BRANCH="${PR_BASE:-$ENV_BASE}"
+
+        if [[ -z "${TARGET_BRANCH}" ]]; then
+          echo "::error::Could not determine the base branch. Ensure this action runs on a pull_request, pull_request_review, or pull_request_target event."
+          exit 1
+        fi
+
+        echo "Detected target branch: ${TARGET_BRANCH}"
+
+        git fetch --no-tags origin "${TARGET_BRANCH}"
+
+        DIFF_BASE="$(git merge-base HEAD "origin/${TARGET_BRANCH}")"
 
         mapfile -t CHANGED_FILES < <(git diff --name-only --diff-filter=AM "${DIFF_BASE}" HEAD)
 
@@ -25,6 +39,7 @@ runs:
 
         CHANGED_FILES_PATH="${RUNNER_TEMP}/freo-changed-files.txt"
         printf '%s\n' "${CHANGED_FILES[@]}" > "${CHANGED_FILES_PATH}"
+        
         echo "CHANGED_FILES_PATH=${CHANGED_FILES_PATH}" >> "$GITHUB_ENV"
         echo "Detected ${#CHANGED_FILES[@]} file(s) to lint."
         echo "has_changes=true" >> "$GITHUB_OUTPUT"
@@ -43,7 +58,6 @@ runs:
       run: |
         set -euo pipefail
 
-        # Detect OS/arch to choose the right asset
         case "${RUNNER_OS}" in
           Linux)   OS_TRIPLE="unknown-linux-gnu" ;;
           macOS)   OS_TRIPLE="apple-darwin" ;;
@@ -113,13 +127,16 @@ runs:
     - name: Run freo on added/modified files
       if: ${{ steps.diff.outputs.has_changes == 'true' }}
       shell: bash
+      env:
+        INPUT_CONFIG: ${{ inputs.config }}
       run: |
         set -euo pipefail
         mapfile -t CHANGED_FILES < "${CHANGED_FILES_PATH}"
-        CONFIG_PATH="${{ inputs.config }}"
+        
         CONFIG_ARGS=()
-        if [[ -n "${CONFIG_PATH}" ]]; then
-          CONFIG_ARGS=(-c "${CONFIG_PATH}")
+        if [[ -n "${INPUT_CONFIG}" ]]; then
+          CONFIG_ARGS=(-c "${INPUT_CONFIG}")
         fi
-        echo "Running: ${FREO_BIN} ${CONFIG_ARGS[*]} -f ${CHANGED_FILES[*]}"
+        
+        echo "Running: ${FREO_BIN} ${CONFIG_ARGS[*]} -f [file list]"
         "${FREO_BIN}" "${CONFIG_ARGS[@]}" -f "${CHANGED_FILES[@]}"
