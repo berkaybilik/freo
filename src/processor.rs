@@ -188,4 +188,32 @@ mod tests {
             "let x = 5;\nlet y = 6; // keep\n"
         );
     }
+
+    #[test]
+    fn remove_matching_comments_from_stream_leaves_input_unchanged_when_there_are_no_matches() {
+        let input_text = "let x = 5;\nlet y = 6; // keep";
+
+        let input = Cursor::new(
+            input_text.as_bytes().to_vec(),
+        );
+        let mut output = Vec::new();
+
+        remove_matching_comments_from_stream("//", "FREO", input, &mut output).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            input_text
+        );
+    }
+
+    #[test]
+    fn remove_matching_comments_from_stream_does_not_add_trailing_newline_when_input_has_none() {
+        // Regression test: we must not force a newline at EOF.
+        let input = Cursor::new(b"let x = 5; // FREO remove".to_vec());
+        let mut output = Vec::new();
+
+        remove_matching_comments_from_stream("//", "FREO", input, &mut output).unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "let x = 5;");
+    }
 }
