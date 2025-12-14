@@ -66,9 +66,10 @@ where
 
     let mut current_line = String::new();
     while reader.read_line(&mut current_line)? > 0 {
-        if let Some(processed_line) = strip_keyword_comment(current_line.clone(), &pattern) {
+        let processed_line = strip_keyword_comment(&current_line, &pattern);
+        if !processed_line.is_empty() {
             write!(writer, "{}", processed_line)?;
-        }
+        }        
         current_line.clear();
     }
 
@@ -89,16 +90,19 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
         .unwrap_or_else(|e| panic!("Failed to build regex: {}", e))
 }
 
-fn strip_keyword_comment(mut line: String, pattern: &Regex) -> Option<String> {
-    if let Some(match_) = pattern.find(&line) {
-        let range = match_.start()..match_.end();
-        line.replace_range(range, "");
+fn strip_keyword_comment(text: &str, pattern: &Regex) -> String {
+    let Some(match_) = pattern.find(text) else {
+        return text.to_string();
+    };
 
-        if line.trim().is_empty() {
-            return None;
-        }
+    let mut stripped_text = text.to_string();
+    stripped_text.replace_range(match_.start()..match_.end(), "");
+
+    if stripped_text.trim().is_empty() {
+        return String::new();
     }
-    Some(line)
+
+    return stripped_text;
 }
 
 #[cfg(test)]
@@ -128,53 +132,53 @@ mod tests {
     #[test]
     fn strip_keyword_comment_truncates_trailing_matching_comment() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result = strip_keyword_comment("let x = 5; // FREO: remove debug".to_string(), &pattern);
+        let result = strip_keyword_comment("let x = 5; // FREO: remove debug", &pattern);
 
-        assert_eq!(result, Some("let x = 5;".to_string()));
+        assert_eq!(result, "let x = 5;");
     }
 
     #[test]
     fn strip_keyword_comment_preserves_newline_when_matching_comment_is_trailing() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result = strip_keyword_comment("let x = 5; // FREO: remove debug\n".to_string(), &pattern);
+        let result = strip_keyword_comment("let x = 5; // FREO: remove debug\n", &pattern);
 
-        assert_eq!(result, Some("let x = 5;\n".to_string()));
+        assert_eq!(result, "let x = 5;\n");
     }
 
     #[test]
-    fn strip_keyword_comment_returns_none_when_only_matching_comment_remains() {
+    fn strip_keyword_comment_returns_empty_when_only_matching_comment_remains() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
 
-        let result = strip_keyword_comment("// FREO clean up\n".to_string(), &pattern);
-        assert!(result.is_none());
+        let result = strip_keyword_comment("// FREO clean up\n", &pattern);
+        assert_eq!(result, "");
 
-        let result = strip_keyword_comment("// FREO clean up".to_string(), &pattern);
-        assert!(result.is_none());
+        let result = strip_keyword_comment("// FREO clean up", &pattern);
+        assert_eq!(result, "");
     }
 
     #[test]
     fn strip_keyword_comment_returns_original_line_if_no_match() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let original = "let x = 5; // NOTE keep".to_string();
-        let result = strip_keyword_comment(original.clone(), &pattern);
+        let original = "let x = 5; // NOTE keep";
+        let result = strip_keyword_comment(original, &pattern);
 
-        assert_eq!(result, Some(original));
+        assert_eq!(result, original);
     }
 
     #[test]
     fn strip_keyword_comment_ignores_keyword_inside_string_literal() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let original = r#"println!("FREO: keep this string");"#.to_string();
+        let original = r#"println!("FREO: keep this string");"#;
 
-        let result = strip_keyword_comment(original.clone(), &pattern);
+        let result = strip_keyword_comment(original, &pattern);
 
-        assert_eq!(result, Some(original));
+        assert_eq!(result, original);
 
-        let original = r#"//println!("FREO: keep this string");"#.to_string();
+        let original = r#"//println!("FREO: keep this string");"#;
 
-        let result = strip_keyword_comment(original.clone(), &pattern);
+        let result = strip_keyword_comment(original, &pattern);
 
-        assert_eq!(result, Some(original));
+        assert_eq!(result, original);
     }
 
     #[test]
@@ -211,7 +215,6 @@ mod tests {
 
     #[test]
     fn remove_matching_comments_from_stream_does_not_add_trailing_newline_when_input_has_none() {
-        // Regression test: we must not force a newline at EOF.
         let input = Cursor::new(b"let x = 5; // FREO remove".to_vec());
         let mut output = Vec::new();
 
