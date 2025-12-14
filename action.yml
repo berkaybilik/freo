@@ -1,5 +1,5 @@
 name: "freo - for the reviewers eyes only"
-description: "FREO (For the Reviewers' Eyes Only) is a small linting tool that runs as part of your GitHub Workflow to remove certain comment lines. You can use FREO to leave comments that will make life easier for your PR reviewers (human or AI) which you don't want committed to your main branch."
+description: "Strip comments that are meant For the Reviewers' Eyes Only."
 branding:
   icon: "eye-off"
   color: "green"
