@@ -65,7 +65,7 @@ jobs:
           persist-credentials: true
 
       - name: Run freo
-        uses: berkaybilik/freo@v0.0.12
+        uses: berkaybilik/freo@v1.0.1
 
       - name: Detect freo changes
         id: git_status
@@ -110,7 +110,7 @@ Example:
 
 ```yaml
 - name: Run freo with custom config
-  uses: berkaybilik/freo@v0.0.12
+  uses: berkaybilik/freo@v1.0.1
   with:
     config: .github/freo.json
 ```
