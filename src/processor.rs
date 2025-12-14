@@ -55,7 +55,7 @@ fn persist_temp_file(
 fn remove_matching_comments_from_stream<R, W>(
     comment_token: &str,
     keyword: &str,
-    reader: R,
+    mut reader: R,
     writer: &mut W,
 ) -> io::Result<()>
 where
@@ -64,11 +64,12 @@ where
 {
     let pattern: Regex = build_keyword_comment_pattern(comment_token, keyword);
 
-    for line in reader.lines() {
-        let line = line?;
-        if let Some(processed_line) = strip_keyword_comment(line, &pattern) {
-            writeln!(writer, "{}", processed_line)?;
+    let mut current_line = String::new();
+    while reader.read_line(&mut current_line)? > 0 {
+        if let Some(processed_line) = strip_keyword_comment(current_line.clone(), &pattern) {
+            write!(writer, "{}", processed_line)?;
         }
+        current_line.clear();
     }
 
     Ok(())
@@ -78,7 +79,10 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
     let comment_token_literal = regex::escape(comment_token);
     let keyword_literal = regex::escape(keyword);
 
-    let pattern_format = format!(r"{}\s*{}\b:?", comment_token_literal, keyword_literal);
+    let pattern_format = format!(
+        r"\s*{}\s*{}\b:?[^\r\n]*",
+        comment_token_literal, keyword_literal
+    );
     RegexBuilder::new(&pattern_format)
         .case_insensitive(true)
         .build()
@@ -86,10 +90,9 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
 }
 
 fn strip_keyword_comment(mut line: String, pattern: &Regex) -> Option<String> {
-    if let Some(mat) = pattern.find(&line) {
-        line.truncate(mat.start());
-        let trimmed_len = line.trim_end().len();
-        line.truncate(trimmed_len);
+    if let Some(match_) = pattern.find(&line) {
+        let range = match_.start()..match_.end();
+        line.replace_range(range, "");
 
         if line.trim().is_empty() {
             return None;
@@ -123,7 +126,7 @@ mod tests {
     }
 
     #[test]
-    fn strip_keyword_comment_truncates_trailing_matching_comment_and_whitespace() {
+    fn strip_keyword_comment_truncates_trailing_matching_comment() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
         let result = strip_keyword_comment("let x = 5; // FREO: remove debug".to_string(), &pattern);
 
@@ -133,9 +136,9 @@ mod tests {
     #[test]
     fn strip_keyword_comment_preserves_newline_when_matching_comment_is_trailing() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result = strip_keyword_comment("let x = 5; // FREO: remove debug".to_string(), &pattern);
+        let result = strip_keyword_comment("let x = 5; // FREO: remove debug\n".to_string(), &pattern);
 
-        assert_eq!(result, Some("let x = 5;".to_string()));
+        assert_eq!(result, Some("let x = 5;\n".to_string()));
     }
 
     #[test]
