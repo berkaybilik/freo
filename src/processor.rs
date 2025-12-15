@@ -66,8 +66,12 @@ where
 
     let mut current_line = String::new();
     while reader.read_line(&mut current_line)? > 0 {
+<<<<<<< Updated upstream
         let processed_line = strip_keyword_comment(&current_line, &pattern);
         if !processed_line.is_empty() {
+=======
+        if let Some(processed_line) = strip_keyword_comment(current_line, &pattern) {
+>>>>>>> Stashed changes
             write!(writer, "{}", processed_line)?;
         }        
         current_line.clear();
@@ -90,6 +94,7 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
         .unwrap_or_else(|e| panic!("Failed to build regex: {}", e))
 }
 
+<<<<<<< Updated upstream
 fn strip_keyword_comment(text: &str, pattern: &Regex) -> String {
     let Some(match_) = pattern.find(text) else {
         return text.to_string();
@@ -103,6 +108,18 @@ fn strip_keyword_comment(text: &str, pattern: &Regex) -> String {
     }
 
     return stripped_text;
+=======
+fn strip_keyword_comment(line: &str, pattern: &Regex) -> &str {
+    if let Some(match_) = pattern.find(&line) {
+        let range = match_.start()..match_.end();
+        line.replace_range(range, "");
+
+        if line.trim().is_empty() {
+            return "";
+        }
+    }
+    line
+>>>>>>> Stashed changes
 }
 
 #[cfg(test)]
