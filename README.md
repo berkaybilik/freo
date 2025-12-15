@@ -4,6 +4,8 @@
 
 It works by **stripping comment text** that contains a keyword (default: `FREO`) across the files you changed in the PR.
 
+<img width="558" height="387" alt="Screenshot 2025-12-15 at 23 39 10" src="https://github.com/user-attachments/assets/e4690e6c-b3ff-4430-a761-0d73a670dacf" />
+
 ### What it does
 
 - **Removes** `FREO` comments from code you changed (added/modified files in the PR).
