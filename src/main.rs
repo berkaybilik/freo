@@ -21,7 +21,9 @@ fn main() {
 
     let missing: Vec<&std::path::PathBuf> = cli.files.iter().filter(|p| !p.exists()).collect();
     if !missing.is_empty() {
-        eprintln!("Error: file not found at {}", missing[0].display());
+        for path in &missing {
+            eprintln!("Error: file not found at {}", path.display());
+        }
         std::process::exit(2);
     }
 

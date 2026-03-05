@@ -1,6 +1,5 @@
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use regex::{Regex, RegexBuilder};
@@ -34,9 +33,7 @@ fn persist_temp_file(
     parent_dir: &Path,
 ) -> io::Result<()> {
     if let Ok(orig_meta) = fs::metadata(original_path) {
-        let mut perms = orig_meta.permissions();
-        perms.set_mode(orig_meta.mode());
-        let _ = fs::set_permissions(temp_file.path(), perms);
+        let _ = fs::set_permissions(temp_file.path(), orig_meta.permissions());
     }
 
     temp_file.as_file().sync_all()?;
@@ -102,7 +99,7 @@ fn strip_keyword_comment(text: &str, pattern: &Regex) -> String {
         return String::new();
     }
 
-    return stripped_text;
+    stripped_text
 }
 
 #[cfg(test)]
