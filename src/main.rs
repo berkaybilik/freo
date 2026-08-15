@@ -7,6 +7,7 @@ use freo::{AppConfig, CommentTokenResolver};
 
 #[derive(Parser, Debug)]
 #[command(name = "freo")]
+#[command(version)]
 #[command(about = "For the Reviewers Eyes Only", long_about = None)]
 struct Cli {
     #[arg(short = 'f', long = "file", value_name = "FILE", num_args = 1.., required = true)]

@@ -4,44 +4,88 @@ on:
   pull_request:
     types: [labeled]
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
-  freo-on-pr:
+  freo:
     name: freo (label ${{ github.event.label.name }})
     if: >-
       github.event.label.name == 'freo' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: read
+    outputs:
+      has_patch: ${{ steps.patch.outputs.has_patch }}
     steps:
       - name: Checkout PR head branch
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: true
-
-      # Use the published freo composite action.
-      - name: Run freo via published action
-        uses: berkaybilik/freo@v1.0.0
+          persist-credentials: false
+      - name: Run freo
+        uses: ./
         with:
           config: freo.json
 
-      - name: Commit and push changes (if any)
+      - name: Export changes as a patch
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No changes to commit."
+            echo "has_patch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff > "${RUNNER_TEMP}/freo.patch"
+          echo "has_patch=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload patch
+        if: steps.patch.outputs.has_patch == 'true'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: freo-patch
+          path: ${{ runner.temp }}/freo.patch
+          retention-days: 1
+          if-no-files-found: error
+
+  commit:
+    name: Commit freo changes
+    needs: freo
+    if: needs.freo.outputs.has_patch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout PR head commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+
+      - name: Download patch
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: freo-patch
+          path: ${{ runner.temp }}/patch
+
+      - name: Apply, commit, and push
         env:
           PR_BRANCH: ${{ github.event.pull_request.head.ref }}
         shell: bash
         run: |
           set -euo pipefail
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore(freo): apply changes"
-            git push origin "HEAD:${PR_BRANCH}"
-          else
-            echo "No changes to commit."
-          fi
 
+          git apply --index "${RUNNER_TEMP}/patch/freo.patch"
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(freo): apply changes"
+
+          # Never force-push: if someone pushed while this workflow was running,
+          # the head SHA we patched is no longer the tip and the push is
+          # rejected rather than silently reverting them.
+          git push origin "HEAD:${PR_BRANCH}"

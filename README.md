@@ -37,7 +37,7 @@ With this rule in place, Claude will embed its reasoning in the code itself — 
 - **Removes** `FREO` comments from code you changed (added/modified files in the PR).
 - **Keeps everything else** unchanged.
 - **Skips unknown file types** (unless you configure a comment token for them).
-- **Runs as a GitHub Action** (composite action that downloads a prebuilt `freo` binary from this repo's Releases, verifies the artifact's attestation, then executes it).
+- **Runs as a GitHub Action** (composite action that ships prebuilt `freo` binaries in-repo under `dist/`, verifies their build provenance, then executes them — nothing is downloaded at run time).
 
 ### What counts as a "FREO comment"?
 
@@ -83,9 +83,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      attestations: read # the action verifies the binary's provenance
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
@@ -93,7 +94,8 @@ jobs:
           persist-credentials: true
 
       - name: Run freo
-        uses: berkaybilik/freo@v1.0.1
+        # Copy the exact pin line from the release page you want.
+        uses: berkaybilik/freo@<commit-sha> # v1.1.0
 
       - name: Detect freo changes
         id: git_status
@@ -129,7 +131,13 @@ jobs:
 
 ### Action inputs
 
-- **Important**: this action is meant to be used via a **release tag** (for example `uses: berkaybilik/freo@v1.0.0`). It downloads the `freo` binary from the release that matches the tag you reference.
+- **Pin by commit SHA.** A git tag can be repointed at any time by anyone with push access, so `@v1.1.0` is a promise that can be rewritten after you've reviewed it. A commit SHA names content, not a label — it cannot be moved. Every release page carries the exact line to copy:
+
+  ```yaml
+  - uses: berkaybilik/freo@<commit-sha> # v1.1.0
+  ```
+
+  Tags still work if you prefer them, and `dependabot` will keep a SHA pin current for you (see `.github/dependabot.yml` in this repo for the pattern).
 
 - **`config`** (optional): Path to a JSON config file.
   - Example: `config: .github/freo.json`
@@ -138,10 +146,26 @@ Example:
 
 ```yaml
 - name: Run freo with custom config
-  uses: berkaybilik/freo@v1.0.1
+  uses: berkaybilik/freo@<commit-sha> # v1.1.0
   with:
     config: .github/freo.json
 ```
+
+### How the binary is trusted
+
+`freo` ships prebuilt binaries inside this repository at `dist/<target>/freo`, so pinning a commit SHA gives you byte-exact content with no download at run time.
+
+Because a committed binary is not something you can read in review, the action additionally verifies its [build provenance](https://docs.github.com/actions/security-guides/using-artifact-attestations) before executing it:
+
+```bash
+gh attestation verify dist/<target>/freo \
+  -R berkaybilik/freo \
+  --signer-workflow berkaybilik/freo/.github/workflows/release.yml
+```
+
+That proves the binary was produced by this repo's release workflow from this repo's source, rather than built elsewhere and committed by hand. You can run the same command yourself against any pinned checkout.
+
+> **Upgrading from v1.0.x:** older versions downloaded the binary from the release page and only worked when referenced by tag. They keep working — nothing was deleted — but SHA pinning requires v1.1.0 or later.
 
 ### Configuration (`freo.json`)
 
