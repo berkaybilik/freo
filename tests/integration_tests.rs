@@ -60,7 +60,7 @@ fn run_respects_custom_comment_tokens_and_keyword_from_config() {
     let config = AppConfig::new(Some("ticket-123".to_string()), Some(custom_map));
     let resolver = CommentTokenResolver::new(config.comment_map().cloned());
 
-    run(&config, &[file_path.clone()], &resolver).expect("run should succeed");
+    run(&config, std::slice::from_ref(&file_path), &resolver).expect("run should succeed");
 
     let output = fs::read_to_string(&file_path).unwrap();
     assert_eq!(output, "keep ;; TODO other\nvalue\nfinal line\n");
@@ -87,7 +87,7 @@ fn remove_matching_comments_preserves_file_permissions() {
     let config = AppConfig::new(None, None);
     let resolver = CommentTokenResolver::new(config.comment_map().cloned());
 
-    run(&config, &[file_path.clone()], &resolver).expect("run should succeed");
+    run(&config, std::slice::from_ref(&file_path), &resolver).expect("run should succeed");
 
     let output = fs::read_to_string(&file_path).unwrap();
     assert_eq!(output, "fn main() {}\nlet x = 5; // keep\n");

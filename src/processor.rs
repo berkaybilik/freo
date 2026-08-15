@@ -12,13 +12,13 @@ pub fn remove_matching_comments(
 ) -> io::Result<()> {
     let parent = file_path.parent().unwrap_or(std::path::Path::new("."));
     let temp_file = NamedTempFile::new_in(parent)?;
-    
+
     {
         let reader = BufReader::new(File::open(file_path)?);
         let mut writer = BufWriter::new(&temp_file);
 
         remove_matching_comments_from_stream(comment_token, keyword, reader, &mut writer)?;
-    
+
         writer.flush()?;
     }
 
@@ -38,9 +38,7 @@ fn persist_temp_file(
 
     temp_file.as_file().sync_all()?;
 
-    temp_file
-        .persist(original_path)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    temp_file.persist(original_path).map_err(io::Error::other)?;
 
     if let Ok(dir) = File::open(parent_dir) {
         let _ = dir.sync_all();
@@ -66,7 +64,7 @@ where
         let processed_line = strip_keyword_comment(&current_line, &pattern);
         if !processed_line.is_empty() {
             write!(writer, "{}", processed_line)?;
-        }        
+        }
         current_line.clear();
     }
 
@@ -197,17 +195,12 @@ mod tests {
     fn remove_matching_comments_from_stream_leaves_input_unchanged_when_there_are_no_matches() {
         let input_text = "let x = 5;\nlet y = 6; // keep";
 
-        let input = Cursor::new(
-            input_text.as_bytes().to_vec(),
-        );
+        let input = Cursor::new(input_text.as_bytes().to_vec());
         let mut output = Vec::new();
 
         remove_matching_comments_from_stream("//", "FREO", input, &mut output).unwrap();
 
-        assert_eq!(
-            String::from_utf8(output).unwrap(),
-            input_text
-        );
+        assert_eq!(String::from_utf8(output).unwrap(), input_text);
     }
 
     #[test]
