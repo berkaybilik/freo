@@ -89,67 +89,92 @@ mod tests {
     #[test]
     fn comment_token_resolver_custom_tokens_are_used_when_provided_and_no_overlap_with_defaults() {
         assert!(
-            CommentTokenResolver::new(None).token_for(PathBuf::from("file.txt").as_path()).is_none(),
+            CommentTokenResolver::new(None)
+                .token_for(PathBuf::from("file.txt").as_path())
+                .is_none(),
             "`txt` already exists in the defaults so this test is meaningless"
         );
 
-        let resolver = CommentTokenResolver::new(
-            Some(
-                HashMap::from([("txt".to_string(), "X".to_string())])
-            )
-        );
+        let resolver =
+            CommentTokenResolver::new(Some(HashMap::from([("txt".to_string(), "X".to_string())])));
 
-        assert_eq!(resolver.token_for(PathBuf::from("file.txt").as_path()), Some("X"));
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.txt").as_path()),
+            Some("X")
+        );
     }
 
     #[test]
     fn comment_token_resolver_custom_tokens_override_defaults() {
         assert!(
-            !CommentTokenResolver::new(None).token_for(PathBuf::from("file.rs").as_path()).is_none(),
+            CommentTokenResolver::new(None)
+                .token_for(PathBuf::from("file.rs").as_path())
+                .is_some(),
             "`rs` does not exist in defaults so this test is meaningless"
         );
 
-        let resolver = CommentTokenResolver::new(
-            Some(
-                HashMap::from([("rs".to_string(), "X".to_string())])
-            )
-        );
+        let resolver =
+            CommentTokenResolver::new(Some(HashMap::from([("rs".to_string(), "X".to_string())])));
 
-        assert_eq!(resolver.token_for(PathBuf::from("file.rs").as_path()), Some("X"));
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.rs").as_path()),
+            Some("X")
+        );
     }
 
     #[test]
     fn comment_token_resolver_custom_tokens_are_normalized() {
-        let resolver = CommentTokenResolver::new(
-            Some(
-                HashMap::from(
-                    [
-                        (".rs".to_string(), "A".to_string()),
-                        ("PY".to_string(), "B".to_string()),
-                        ("   txt   ".to_string(), "C".to_string()),
-                        ("   YaMl   ".to_string(), "D".to_string()),
-                        ("   .Yml   ".to_string(), "E".to_string()),
-                        ("sql.".to_string(), "F".to_string()),
-                    ]
-            )
-            )
-        );
+        let resolver = CommentTokenResolver::new(Some(HashMap::from([
+            (".rs".to_string(), "A".to_string()),
+            ("PY".to_string(), "B".to_string()),
+            ("   txt   ".to_string(), "C".to_string()),
+            ("   YaMl   ".to_string(), "D".to_string()),
+            ("   .Yml   ".to_string(), "E".to_string()),
+            ("sql.".to_string(), "F".to_string()),
+        ])));
 
-        assert_eq!(resolver.token_for(PathBuf::from("file.rs").as_path()), Some("A"));
-        assert_eq!(resolver.token_for(PathBuf::from("file.py").as_path()), Some("B"));
-        assert_eq!(resolver.token_for(PathBuf::from("file.txt").as_path()), Some("C"));
-        assert_eq!(resolver.token_for(PathBuf::from("file.yaml").as_path()), Some("D"));
-        assert_eq!(resolver.token_for(PathBuf::from("file.yml").as_path()), Some("E"));
-        assert_ne!(resolver.token_for(PathBuf::from("file.sql").as_path()), Some("F"));
-        assert_ne!(resolver.token_for(PathBuf::from("file.sql.").as_path()), Some("F"));
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.rs").as_path()),
+            Some("A")
+        );
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.py").as_path()),
+            Some("B")
+        );
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.txt").as_path()),
+            Some("C")
+        );
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.yaml").as_path()),
+            Some("D")
+        );
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.yml").as_path()),
+            Some("E")
+        );
+        assert_ne!(
+            resolver.token_for(PathBuf::from("file.sql").as_path()),
+            Some("F")
+        );
+        assert_ne!(
+            resolver.token_for(PathBuf::from("file.sql.").as_path()),
+            Some("F")
+        );
     }
 
     #[test]
     fn comment_token_resolver_returns_none_for_paths_without_extension() {
         let resolver = CommentTokenResolver::new(None);
 
-        assert_eq!(resolver.token_for(PathBuf::from("Makefile").as_path()), None);
-        assert_eq!(resolver.token_for(PathBuf::from("no_extension").as_path()), None);
+        assert_eq!(
+            resolver.token_for(PathBuf::from("Makefile").as_path()),
+            None
+        );
+        assert_eq!(
+            resolver.token_for(PathBuf::from("no_extension").as_path()),
+            None
+        );
     }
 
     #[test]
@@ -159,7 +184,13 @@ mod tests {
             ("md".to_string(), "".to_string()),
         ])));
 
-        assert_eq!(resolver.token_for(PathBuf::from("file.txt").as_path()), None);
-        assert_eq!(resolver.token_for(PathBuf::from("notes.md").as_path()), None);
+        assert_eq!(
+            resolver.token_for(PathBuf::from("file.txt").as_path()),
+            None
+        );
+        assert_eq!(
+            resolver.token_for(PathBuf::from("notes.md").as_path()),
+            None
+        );
     }
 }

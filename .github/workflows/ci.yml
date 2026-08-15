@@ -27,6 +27,45 @@ jobs:
       - name: Test
         run: cargo test --all --locked
 
+  lint:
+    name: Lint
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+          # The action installs the minimal profile, so ask for these by name.
+          components: clippy, rustfmt
+
+      # Every linter runs even if an earlier one fails, so a single run reports
+      # all of them instead of stopping at the first. The job still fails.
+      - name: cargo fmt
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: actionlint
+        if: ${{ !cancelled() }}
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # v1.7.12
+        with:
+          args: -color
+
+      - name: yamllint
+        if: ${{ !cancelled() }}
+        run: |
+          pipx install yamllint==1.38.0
+          yamllint --strict .
+
   audit:
     name: Audit
     runs-on: ubuntu-latest
