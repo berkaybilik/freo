@@ -94,8 +94,9 @@ jobs:
           persist-credentials: true
 
       - name: Run freo
-        # Copy the exact pin line from the release page you want.
-        uses: berkaybilik/freo@<commit-sha> # v1.1.0
+        # Replace with the pin line copied from the release you want:
+        # https://github.com/berkaybilik/freo/releases/latest
+        uses: berkaybilik/freo@PASTE_SHA_FROM_RELEASE_PAGE # vX.Y.Z
 
       - name: Detect freo changes
         id: git_status
@@ -131,11 +132,15 @@ jobs:
 
 ### Action inputs
 
-- **Pin by commit SHA.** A git tag can be repointed at any time by anyone with push access, so `@v1.1.0` is a promise that can be rewritten after you've reviewed it. A commit SHA names content, not a label — it cannot be moved. Every release page carries the exact line to copy:
+- **Pin by commit SHA.** A git tag can be repointed at any time by anyone with push access, so `@v1.1.0` is a promise that can be rewritten after you've reviewed it. A commit SHA names content, not a label — it cannot be moved.
+
+  Every [release page](https://github.com/berkaybilik/freo/releases) carries the exact line to copy, and that is the only place to take it from — a SHA from anywhere else may belong to a fork rather than to a build this repo published:
 
   ```yaml
-  - uses: berkaybilik/freo@<commit-sha> # v1.1.0
+  - uses: berkaybilik/freo@PASTE_SHA_FROM_RELEASE_PAGE # vX.Y.Z
   ```
+
+  Keep the trailing version comment — it is what makes an opaque SHA readable, and `dependabot` rewrites it alongside the SHA when it bumps the pin.
 
   Tags still work if you prefer them, and `dependabot` will keep a SHA pin current for you (see `.github/dependabot.yml` in this repo for the pattern).
 
@@ -146,7 +151,7 @@ Example:
 
 ```yaml
 - name: Run freo with custom config
-  uses: berkaybilik/freo@<commit-sha> # v1.1.0
+  uses: berkaybilik/freo@PASTE_SHA_FROM_RELEASE_PAGE # vX.Y.Z
   with:
     config: .github/freo.json
 ```
