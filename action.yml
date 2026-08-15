@@ -42,7 +42,7 @@ runs:
 
         CHANGED_FILES_PATH="${RUNNER_TEMP}/freo-changed-files.txt"
         printf '%s\n' "${CHANGED_FILES[@]}" > "${CHANGED_FILES_PATH}"
-        
+
         echo "CHANGED_FILES_PATH=${CHANGED_FILES_PATH}" >> "$GITHUB_ENV"
         echo "Detected ${#CHANGED_FILES[@]} file(s) to lint."
         echo "has_changes=true" >> "$GITHUB_OUTPUT"
@@ -52,80 +52,95 @@ runs:
       shell: bash
       run: echo "No changed files detected; skipping freo."
 
-    - name: Download freo artifact
+    - name: Resolve platform binary
       if: ${{ steps.diff.outputs.has_changes == 'true' }}
       shell: bash
-      env:
-        VERSION: ${{ github.action_ref }}
-        REPO: berkaybilik/freo
       run: |
         set -euo pipefail
 
         case "${RUNNER_OS}" in
-          Linux)   OS_TRIPLE="unknown-linux-gnu" ;;
-          macOS)   OS_TRIPLE="apple-darwin" ;;
-          *) echo "Unsupported OS: ${RUNNER_OS}. Only Linux and macOS are supported."; exit 1 ;;
+          Linux) OS_TRIPLE="unknown-linux-gnu" ;;
+          macOS) OS_TRIPLE="apple-darwin" ;;
+          *) echo "::error::Unsupported OS: ${RUNNER_OS}. Only Linux and macOS are supported."; exit 1 ;;
         esac
 
         case "${RUNNER_ARCH}" in
           X64)   ARCH="x86_64" ;;
           ARM64) ARCH="aarch64" ;;
-          *) echo "Unsupported ARCH: ${RUNNER_ARCH}"; exit 1 ;;
+          *) echo "::error::Unsupported ARCH: ${RUNNER_ARCH}"; exit 1 ;;
         esac
 
         TARGET="${ARCH}-${OS_TRIPLE}"
-        BASENAME="freo-${VERSION}-${TARGET}"
-        ASSET="${BASENAME}.tar.gz"
-        WORK_DIR="$(mktemp -d "${RUNNER_TEMP}/freo.XXXXXX")"
-        ASSET_PATH="${WORK_DIR}/${ASSET}"
+        DIST_DIR="${GITHUB_ACTION_PATH}/dist"
+        FREO_BIN="${DIST_DIR}/${TARGET}/freo"
 
-        if [[ -z "${VERSION:-}" ]]; then
-          echo "VERSION could not be determined. Invoke this action via a tag, e.g., uses: berkaybilik/freo@v1.2.3."
+        if [[ ! -d "${DIST_DIR}" ]]; then
+          echo "::error::This ref has no dist/ directory. Before v1.1.0 the binary lived on the release page instead; pin the SHA printed on a v1.1.0-or-later release."
           exit 1
         fi
 
-        DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}"
-
-        echo "Downloading ${ASSET} from ${DOWNLOAD_URL}"
-        if ! curl -sSfL -o "${ASSET_PATH}" "${DOWNLOAD_URL}"; then
-          echo "Failed to download ${ASSET} from ${DOWNLOAD_URL}"
+        if [[ ! -f "${FREO_BIN}" ]]; then
+          echo "::error::No prebuilt freo binary for ${TARGET} at ${FREO_BIN}."
+          echo "::error::Prebuilt targets in this ref: $(cd "${DIST_DIR}" && printf '%s ' */ | tr -d '/')"
           exit 1
         fi
 
-        {
-          echo "WORK_DIR=${WORK_DIR}"
-          echo "ASSET_PATH=${ASSET_PATH}"
-          echo "BASENAME=${BASENAME}"
-        } >> "$GITHUB_ENV"
+        # git stores mode 100755, but restore the bit defensively in case the
+        # action was materialised through something that dropped it.
+        chmod +x "${FREO_BIN}"
+
+        echo "FREO_BIN=${FREO_BIN}" >> "$GITHUB_ENV"
+        echo "Resolved ${FREO_BIN}"
 
     - name: Verify artifact attestation
       if: ${{ steps.diff.outputs.has_changes == 'true' }}
       shell: bash
       env:
-        VERSION: ${{ github.action_ref }}
         REPO: berkaybilik/freo
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-        if [[ -z "${GH_TOKEN}" ]]; then
-          echo "GH_TOKEN/GITHUB_TOKEN not set; cannot verify attestation"
+        if [[ -z "${GH_TOKEN:-}" ]]; then
+          echo "::error::GH_TOKEN is not set; cannot verify the binary's attestation."
           exit 1
         fi
-        gh attestation verify "${ASSET_PATH}" \
+        gh attestation verify "${FREO_BIN}" \
           -R "${REPO}" \
-          --source-ref "refs/tags/${VERSION}"
+          --signer-workflow "${REPO}/.github/workflows/release.yml"
 
-    - name: Install freo
+    - name: Check for version skew
       if: ${{ steps.diff.outputs.has_changes == 'true' }}
-      id: install
       shell: bash
       run: |
         set -euo pipefail
-        tar -xzf "${ASSET_PATH}" -C "${WORK_DIR}"
-        EXTRACT_DIR="${WORK_DIR}/${BASENAME}"
-        FREO_BIN="${EXTRACT_DIR}/freo"
-        echo "FREO_BIN=${FREO_BIN}" >> "$GITHUB_ENV"
+
+        # Every `|| true` here is load-bearing. Under `set -e` with pipefail a
+        # command substitution takes the pipeline's exit status, so a binary
+        # that cannot run --version (one built before the flag existed, or one
+        # that will not exec at all) would abort the step with no diagnostic
+        # and make the fallbacks below unreachable.
+        DECLARED="$(
+          sed -n '/^\[package\]/,/^\[/p' "${GITHUB_ACTION_PATH}/Cargo.toml" \
+            | sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' \
+            | head -1 || true
+        )"
+        SHIPPED="$("${FREO_BIN}" --version 2>/dev/null | awk '{print $2}' || true)"
+
+        if [[ -z "${SHIPPED}" ]]; then
+          echo "::warning::Could not read a version out of ${FREO_BIN}; skipping the skew check."
+        elif [[ -n "${DECLARED}" && "${DECLARED}" != "${SHIPPED}" ]]; then
+          MSG="freo version skew: this tree declares ${DECLARED} but dist/ ships ${SHIPPED}. You have pinned a commit that is not a release; pin the SHA printed on the release page instead."
+          # A local `uses: ./` is this repo dogfooding itself, where the skew is
+          # expected between a version bump and the release that follows it.
+          if [[ "${GITHUB_ACTION_PATH}" == "${GITHUB_WORKSPACE}"* ]]; then
+            echo "::warning::${MSG}"
+          else
+            echo "::error::${MSG}"
+            exit 1
+          fi
+        fi
+
+        echo "Using ${FREO_BIN} (freo ${SHIPPED:-unknown})"
 
     - name: Run freo on added/modified files
       if: ${{ steps.diff.outputs.has_changes == 'true' }}
@@ -135,11 +150,11 @@ runs:
       run: |
         set -euo pipefail
         mapfile -t CHANGED_FILES < "${CHANGED_FILES_PATH}"
-        
+
         CONFIG_ARGS=()
         if [[ -n "${INPUT_CONFIG}" ]]; then
           CONFIG_ARGS=(-c "${INPUT_CONFIG}")
         fi
-        
+
         echo "Running: ${FREO_BIN} ${CONFIG_ARGS[*]} -f [file list]"
         "${FREO_BIN}" "${CONFIG_ARGS[@]}" -f "${CHANGED_FILES[@]}"
