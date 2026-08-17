@@ -16,7 +16,7 @@ When you build with an AI assistant like Claude Code, the reasoning behind imple
 
 Add a rule to your project's `CLAUDE.md` so Claude automatically includes `FREO` comments when generating or modifying code:
 
-```markdown
+````markdown
 ## Review comments
 
 When you write or modify code, annotate non-obvious decisions with `FREO:` comments.
@@ -28,7 +28,18 @@ Examples:
 - `// FREO: using polling here instead of a webhook because the vendor API doesn't support webhooks yet`
 - `// FREO: this cast is safe — the upstream type is wrong, see issue #42`
 - `// FREO: skipping validation here because this path is only reachable from internal services`
+
+For a note that spans several lines, wrap it in `FREO-BEGIN` / `FREO-END` instead of repeating
+the keyword on every line. Always close the block — an unterminated `FREO-BEGIN` fails the run.
+
 ```
+// FREO-BEGIN
+// The retry budget here is deliberately smaller than the caller's — this path is
+// already inside a retry loop, and the product of the two was blowing the 30s
+// gateway timeout.
+// FREO-END
+```
+````
 
 With this rule in place, Claude will embed its reasoning in the code itself — reviewers get full context inline, and `freo` removes it all automatically when the PR is approved.
 
@@ -59,6 +70,35 @@ SELECT * FROM users; -- FREO don't commit this query
 ```
 
 If a line becomes empty after removing the comment, the whole line is removed.
+
+### Multi-line comments
+
+Repeating the keyword on every line gets tedious, so a `FREO-BEGIN` / `FREO-END` pair removes
+everything between the markers — the marker lines included:
+
+```rust
+// FREO-BEGIN
+// We poll here instead of subscribing because the vendor's webhook delivery is
+// at-least-once with no dedup key, and the dedup table we'd need is more state
+// than this path justifies.
+// Revisit if https://vendor.example/issues/812 ships.
+// FREO-END
+let events = poll_events(&client)?;
+```
+
+The markers are ordinary single-line comments, so they work in every language `freo` knows, and
+they follow a custom `keyword` — set `keyword: "ticket-123"` and you get `ticket-123-BEGIN`.
+Matching is case-insensitive, like the single-line form.
+
+- **Code before a marker is kept.** `let x = 1; // FREO-BEGIN` keeps `let x = 1;`. Everything
+  *strictly between* the markers is removed, whether or not it is a comment.
+- **Markers don't nest.** The first `FREO-END` closes the block.
+- **A stray `FREO-END`** with no open block is stripped like any other keyword comment.
+- **An unterminated `FREO-BEGIN` is an error.** `freo` exits non-zero and leaves the file
+  byte-identical rather than deleting to end of file. Fix the marker and re-run.
+
+For a one-line note, keep using the plain form — the fence is only worth its ceremony when the
+comment actually spans lines.
 
 ### Quick start (recommended)
 
@@ -218,7 +258,9 @@ For Claude, Cursor, Copilot, Codex, or any AI assistant with a rules/instruction
 
 ### Notes & limitations
 
-- **Single-line only**: `freo` removes single-line comment matches; it is not a block-comment parser.
+- **Single-line comment tokens only**: `freo` matches the language's single-line comment token. Multi-line
+  rationale is supported through `FREO-BEGIN` / `FREO-END`, which are themselves single-line comments;
+  native block comments (`/* … */`, Python docstrings) are not parsed.
 - **Only changed files**: the action runs on **added/modified files** in the PR compared to the base branch.
 - **Needs a PR context**: the action determines the base branch from PR metadata; it's intended for `pull_request`, `pull_request_review`, or `pull_request_target`.
 - **Fork PRs**: you typically can't push back to fork branches with the default token; the example workflow detects forks and skips pushing.
