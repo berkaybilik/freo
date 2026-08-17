@@ -95,3 +95,55 @@ fn remove_matching_comments_preserves_file_permissions() {
     let resulting_mode = fs::metadata(&file_path).unwrap().permissions().mode() & 0o777;
     assert_eq!(resulting_mode, original_mode);
 }
+
+#[test]
+fn run_removes_block_marker_regions_across_languages() {
+    let dir = tempdir().expect("temp dir");
+
+    let rs_path = dir.path().join("example.rs");
+    fs::write(
+        &rs_path,
+        "fn main() {\n// FREO-BEGIN\n// polling instead of a webhook: the vendor\n// has no webhook API yet\n// FREO-END\nlet x = 5;\n}\n",
+    )
+    .unwrap();
+
+    let py_path = dir.path().join("script.py");
+    fs::write(
+        &py_path,
+        "# freo-begin\n# reviewer note spanning\n# two lines\n# freo-end\nprint('stay')\n",
+    )
+    .unwrap();
+
+    let config = AppConfig::new(None, None);
+    let resolver = CommentTokenResolver::new(config.comment_map().cloned());
+
+    run(&config, &[rs_path.clone(), py_path.clone()], &resolver).expect("run should succeed");
+
+    assert_eq!(
+        fs::read_to_string(&rs_path).unwrap(),
+        "fn main() {\nlet x = 5;\n}\n"
+    );
+    assert_eq!(fs::read_to_string(&py_path).unwrap(), "print('stay')\n");
+}
+
+#[test]
+fn run_leaves_the_file_untouched_when_a_block_marker_is_unterminated() {
+    let dir = tempdir().expect("temp dir");
+
+    let file_path = dir.path().join("example.rs");
+    let original = "fn main() {}\n// FREO-BEGIN\n// note without an end marker\nlet x = 5;\n";
+    fs::write(&file_path, original).unwrap();
+
+    let config = AppConfig::new(None, None);
+    let resolver = CommentTokenResolver::new(config.comment_map().cloned());
+
+    let error = run(&config, std::slice::from_ref(&file_path), &resolver)
+        .expect_err("unterminated block should fail the run");
+
+    assert!(error.to_string().contains("example.rs"), "{error}");
+    assert_eq!(
+        fs::read_to_string(&file_path).unwrap(),
+        original,
+        "the file must be byte-identical after a refused run"
+    );
+}

@@ -17,7 +17,11 @@ pub fn remove_matching_comments(
         let reader = BufReader::new(File::open(file_path)?);
         let mut writer = BufWriter::new(&temp_file);
 
-        remove_matching_comments_from_stream(comment_token, keyword, reader, &mut writer)?;
+        // On error this returns before `persist_temp_file`, so the temp file is
+        // dropped and the original is left byte-identical.
+        remove_matching_comments_from_stream(comment_token, keyword, reader, &mut writer).map_err(
+            |err| io::Error::new(err.kind(), format!("{}: {}", file_path.display(), err)),
+        )?;
 
         writer.flush()?;
     }
@@ -57,19 +61,58 @@ where
     R: BufRead,
     W: Write,
 {
-    let pattern: Regex = build_keyword_comment_pattern(comment_token, keyword);
+    let keyword_pattern = build_keyword_comment_pattern(comment_token, keyword);
+    let begin_pattern = build_block_marker_pattern(comment_token, keyword, BLOCK_BEGIN_SUFFIX);
+    let end_pattern = build_block_marker_pattern(comment_token, keyword, BLOCK_END_SUFFIX);
+
+    let mut open_block_line: Option<usize> = None;
+    let mut line_number = 0usize;
 
     let mut current_line = String::new();
     while reader.read_line(&mut current_line)? > 0 {
-        let processed_line = strip_keyword_comment(&current_line, &pattern);
+        line_number += 1;
+
+        let processed_line = if open_block_line.is_some() {
+            match end_pattern.find(&current_line) {
+                Some(match_) => {
+                    open_block_line = None;
+                    remove_span(&current_line, match_.start(), match_.end())
+                }
+                // Strictly inside the block, so the whole line goes.
+                None => String::new(),
+            }
+        } else if let Some(match_) = begin_pattern.find(&current_line) {
+            // Checked before the plain keyword pattern, which would otherwise
+            // match the marker and strip it as an ordinary comment.
+            open_block_line = Some(line_number);
+            remove_span(&current_line, match_.start(), match_.end())
+        } else {
+            strip_keyword_comment(&current_line, &keyword_pattern)
+        };
+
         if !processed_line.is_empty() {
             write!(writer, "{}", processed_line)?;
         }
         current_line.clear();
     }
 
+    // Deleting to EOF on a forgotten or misspelled marker would be far worse
+    // than refusing the file, so this aborts before anything is persisted.
+    if let Some(opened_at) = open_block_line {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unterminated {keyword}-{BLOCK_BEGIN_SUFFIX} block opened on line {opened_at} \
+                 (expected a matching {keyword}-{BLOCK_END_SUFFIX}); file left unchanged"
+            ),
+        ));
+    }
+
     Ok(())
 }
+
+const BLOCK_BEGIN_SUFFIX: &str = "BEGIN";
+const BLOCK_END_SUFFIX: &str = "END";
 
 fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
     let comment_token_literal = regex::escape(comment_token);
@@ -79,25 +122,43 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
         r"\s*{}\s*{}\b:?[^\r\n]*",
         comment_token_literal, keyword_literal
     );
-    RegexBuilder::new(&pattern_format)
+    build_case_insensitive(&pattern_format)
+}
+
+fn build_block_marker_pattern(comment_token: &str, keyword: &str, suffix: &str) -> Regex {
+    let comment_token_literal = regex::escape(comment_token);
+    let keyword_literal = regex::escape(keyword);
+
+    let pattern_format = format!(
+        r"\s*{}\s*{}-{}\b[^\r\n]*",
+        comment_token_literal, keyword_literal, suffix
+    );
+    build_case_insensitive(&pattern_format)
+}
+
+fn build_case_insensitive(pattern: &str) -> Regex {
+    RegexBuilder::new(pattern)
         .case_insensitive(true)
         .build()
         .unwrap_or_else(|e| panic!("Failed to build regex: {}", e))
 }
 
-fn strip_keyword_comment(text: &str, pattern: &Regex) -> String {
-    let Some(match_) = pattern.find(text) else {
-        return text.to_string();
-    };
-
+fn remove_span(text: &str, start: usize, end: usize) -> String {
     let mut stripped_text = text.to_string();
-    stripped_text.replace_range(match_.start()..match_.end(), "");
+    stripped_text.replace_range(start..end, "");
 
     if stripped_text.trim().is_empty() {
         return String::new();
     }
 
     stripped_text
+}
+
+fn strip_keyword_comment(text: &str, pattern: &Regex) -> String {
+    match pattern.find(text) {
+        Some(match_) => remove_span(text, match_.start(), match_.end()),
+        None => text.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -211,5 +272,126 @@ mod tests {
         remove_matching_comments_from_stream("//", "FREO", input, &mut output).unwrap();
 
         assert_eq!(String::from_utf8(output).unwrap(), "let x = 5;");
+    }
+
+    fn run_stream(input: &str) -> io::Result<String> {
+        let mut output = Vec::new();
+        remove_matching_comments_from_stream(
+            "//",
+            "FREO",
+            Cursor::new(input.as_bytes().to_vec()),
+            &mut output,
+        )?;
+        Ok(String::from_utf8(output).unwrap())
+    }
+
+    #[test]
+    fn build_block_marker_pattern_matches_only_the_full_marker() {
+        let pattern = build_block_marker_pattern("//", "FREO", BLOCK_BEGIN_SUFFIX);
+
+        assert!(pattern.is_match("// FREO-BEGIN"));
+        assert!(pattern.is_match("//FREO-BEGIN"));
+        assert!(pattern.is_match("  //  freo-begin  "));
+        assert!(!pattern.is_match("// FREO-BEGINNING"));
+        assert!(!pattern.is_match("// FREO-END"));
+        assert!(!pattern.is_match("// FREO: ordinary"));
+    }
+
+    #[test]
+    fn block_markers_remove_every_line_between_them() {
+        let output = run_stream(concat!(
+            "fn main() {\n",
+            "// FREO-BEGIN\n",
+            "// the vendor API has no webhook yet, so we poll;\n",
+            "// revisit once they ship one\n",
+            "// FREO-END\n",
+            "let x = 5;\n",
+            "}\n",
+        ))
+        .unwrap();
+
+        assert_eq!(output, "fn main() {\nlet x = 5;\n}\n");
+    }
+
+    #[test]
+    fn block_markers_remove_non_comment_lines_between_them() {
+        let output =
+            run_stream("// FREO-BEGIN\nlet debug = 1;\n// FREO-END\nlet x = 5;\n").unwrap();
+
+        assert_eq!(output, "let x = 5;\n");
+    }
+
+    #[test]
+    fn block_markers_are_case_insensitive() {
+        let output = run_stream("// freo-begin\n// note\n// Freo-End\nkeep\n").unwrap();
+
+        assert_eq!(output, "keep\n");
+    }
+
+    #[test]
+    fn block_markers_keep_code_preceding_the_marker_on_the_same_line() {
+        let output =
+            run_stream("let a = 1; // FREO-BEGIN\ndrop me\nlet b = 2; // FREO-END\n").unwrap();
+
+        assert_eq!(output, "let a = 1;\nlet b = 2;\n");
+    }
+
+    #[test]
+    fn block_markers_do_not_nest_so_the_first_end_closes() {
+        let output = run_stream(concat!(
+            "// FREO-BEGIN\n",
+            "// FREO-BEGIN\n",
+            "// FREO-END\n",
+            "keep me\n",
+            "// FREO-END\n",
+        ))
+        .unwrap();
+
+        // The inner END closes the block; the trailing END is then a stray
+        // marker, stripped as an ordinary keyword comment.
+        assert_eq!(output, "keep me\n");
+    }
+
+    #[test]
+    fn consecutive_blocks_are_each_removed() {
+        let output = run_stream(concat!(
+            "// FREO-BEGIN\n// one\n// FREO-END\n",
+            "keep\n",
+            "// FREO-BEGIN\n// two\n// FREO-END\n",
+        ))
+        .unwrap();
+
+        assert_eq!(output, "keep\n");
+    }
+
+    #[test]
+    fn unterminated_block_marker_is_an_error_so_nothing_is_persisted() {
+        let error = run_stream("keep\n// FREO-BEGIN\n// note\n").unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let message = error.to_string();
+        assert!(message.contains("line 2"), "{message}");
+        assert!(message.contains("FREO-END"), "{message}");
+    }
+
+    #[test]
+    fn stray_end_marker_is_stripped_as_an_ordinary_keyword_comment() {
+        let output = run_stream("let x = 1;\n// FREO-END\nlet y = 2;\n").unwrap();
+
+        assert_eq!(output, "let x = 1;\nlet y = 2;\n");
+    }
+
+    #[test]
+    fn block_markers_follow_a_custom_keyword() {
+        let mut output = Vec::new();
+        remove_matching_comments_from_stream(
+            ";;",
+            "ticket-123",
+            Cursor::new(b";; Ticket-123-BEGIN\n;; note\n;; ticket-123-end\nkeep\n".to_vec()),
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(String::from_utf8(output).unwrap(), "keep\n");
     }
 }
