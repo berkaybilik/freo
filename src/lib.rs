@@ -20,9 +20,6 @@ pub fn run(
 
     println!("Finding matching lines...");
 
-    // Rewrite every file into a temporary file first and only write the batch
-    // back once all of it is known to be good. A file rejected halfway through
-    // must not leave the files ahead of it already modified.
     let mut prepared = Vec::with_capacity(file_paths.len());
 
     for file_path in file_paths {

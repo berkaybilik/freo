@@ -5,12 +5,6 @@ use std::path::{Path, PathBuf};
 use regex::{Regex, RegexBuilder};
 use tempfile::NamedTempFile;
 
-/// A rewritten file that has not replaced its original yet.
-///
-/// Holding the rewrite back lets a caller process a whole batch before any of
-/// it lands on disk, so one file with an unterminated block can refuse the run
-/// without leaving the files ahead of it already modified. Dropping a
-/// `PreparedFile` discards the rewrite and deletes the temporary file.
 #[must_use = "a prepared file is only written back by `commit`"]
 pub struct PreparedFile {
     temp_file: NamedTempFile,
@@ -18,14 +12,11 @@ pub struct PreparedFile {
 }
 
 impl PreparedFile {
-    /// The path this rewrite will replace once committed.
     pub fn path(&self) -> &Path {
         &self.original_path
     }
 }
 
-/// Rewrites `file_path` into a temporary file alongside it, without touching
-/// the original. Pair with [`commit`].
 pub fn prepare(comment_token: &str, keyword: &str, file_path: &Path) -> io::Result<PreparedFile> {
     let parent = file_path.parent().unwrap_or(Path::new("."));
     let temp_file = NamedTempFile::new_in(parent)?;
@@ -45,7 +36,6 @@ pub fn prepare(comment_token: &str, keyword: &str, file_path: &Path) -> io::Resu
     })
 }
 
-/// Atomically replaces the original file with its rewrite.
 pub fn commit(prepared: PreparedFile) -> io::Result<()> {
     let PreparedFile {
         temp_file,
@@ -56,7 +46,6 @@ pub fn commit(prepared: PreparedFile) -> io::Result<()> {
     persist_temp_file(temp_file, &original_path, &parent)
 }
 
-/// Rewrites a single file in place, as [`prepare`] followed by [`commit`].
 pub fn remove_matching_comments(
     comment_token: &str,
     keyword: &str,
@@ -108,15 +97,12 @@ where
     while reader.read_line(&mut current_line)? > 0 {
         line_number += 1;
 
-        // A marker owns its whole line, so every line from `BEGIN` through
-        // `END` — the markers included — is dropped in full.
         let processed_line = if open_block_line.is_some() {
             if end_pattern.is_match(&current_line) {
                 open_block_line = None;
             }
             String::new()
         } else if let Some(marker) = begin_pattern.find(&current_line) {
-            // A marker line carrying its own END closes the block immediately.
             if inline_end_pattern
                 .find_at(&current_line, marker.end())
                 .is_none()
@@ -162,18 +148,10 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
     build_case_insensitive(&pattern_format)
 }
 
-/// Matches a block marker that owns its line: nothing but whitespace may precede it.
-///
-/// A block marker deletes an unbounded range of the file, so it demands a far
-/// less ambiguous signal than the single-line form. Anchoring keeps a marker
-/// quoted inside a string — a test fixture or a doc example — from opening a
-/// block and swallowing everything up to the next `END`.
 fn build_block_marker_pattern(comment_token: &str, keyword: &str, suffix: &str) -> Regex {
     build_marker_pattern(comment_token, keyword, suffix, r"^[ \t]*")
 }
 
-/// Matches a block marker anywhere on the line, for spotting an `END` that
-/// closes a block on the same line it was opened on.
 fn build_inline_block_marker_pattern(comment_token: &str, keyword: &str, suffix: &str) -> Regex {
     build_marker_pattern(comment_token, keyword, suffix, "")
 }
@@ -207,24 +185,13 @@ fn remove_span(text: &str, start: usize, end: usize) -> String {
     stripped_text
 }
 
-/// Where a comment begins on a line, as far as a language-agnostic scan can tell.
 #[derive(Debug, PartialEq, Eq)]
 enum CommentStart {
-    /// A comment token was found outside of any string literal.
     At(usize),
-    /// The line is entirely code: every comment token on it sits inside a string.
     None,
-    /// Quotes did not balance, so the scan cannot be trusted. Rust lifetimes
-    /// (`&'a str`) and apostrophes in prose both land here.
     Unknown,
 }
 
-/// Finds the first comment token on `line` that is not inside a string literal.
-///
-/// This is a heuristic, not a parser: it tracks single, double and backtick
-/// quotes with backslash escapes, which covers every language `freo` ships a
-/// token for. When the quotes do not balance it reports [`CommentStart::Unknown`]
-/// rather than guessing, and the caller falls back to scanning the whole line.
 fn find_comment_start(line: &str, comment_token: &str) -> CommentStart {
     let bytes = line.as_bytes();
     let token = comment_token.as_bytes();
@@ -232,9 +199,6 @@ fn find_comment_start(line: &str, comment_token: &str) -> CommentStart {
     let mut quote: Option<u8> = None;
     let mut index = 0;
 
-    // Quote characters and `\` are all ASCII, and UTF-8 continuation bytes are
-    // always >= 0x80, so stepping a byte at a time can never false-match inside
-    // a multi-byte character, and any index returned is a char boundary.
     while index < bytes.len() {
         match quote {
             Some(open_quote) => {
@@ -265,8 +229,6 @@ fn find_comment_start(line: &str, comment_token: &str) -> CommentStart {
 
 fn strip_keyword_comment(text: &str, pattern: &Regex, comment_token: &str) -> String {
     let search_from = match find_comment_start(text, comment_token) {
-        // Start at the whitespace run in front of the comment so the pattern's
-        // leading `\s*` can still absorb the gap after the code it trails.
         CommentStart::At(index) => text[..index].trim_end().len(),
         CommentStart::None => return text.to_string(),
         CommentStart::Unknown => 0,
@@ -365,9 +327,6 @@ mod tests {
         );
 
         let slash_pattern = build_keyword_comment_pattern("//", "FREO");
-        // Escaped rather than a raw string on purpose: `freo` runs on its own
-        // source, and its line scan cannot see that a raw string's inner quotes
-        // are literal. Keep fixtures containing the keyword in escaped strings.
         let original = "let url = \"http://FREO.example/docs\";";
 
         assert_eq!(
@@ -408,12 +367,10 @@ mod tests {
             find_comment_start("it's fine // note", "//"),
             CommentStart::Unknown
         );
-        // An escaped quote does not close the string.
         assert_eq!(
             find_comment_start(r#"x = "a\"// b""#, "//"),
             CommentStart::None
         );
-        // Multi-byte characters before the token must not shift the index.
         assert_eq!(
             find_comment_start("let e = \"é\"; // t", "//"),
             CommentStart::At(14)
@@ -484,7 +441,6 @@ mod tests {
     fn build_block_marker_pattern_requires_the_marker_to_own_the_line() {
         let pattern = build_block_marker_pattern("//", "FREO", BLOCK_BEGIN_SUFFIX);
 
-        // Escaped rather than raw strings: see the note in the string-literal test.
         assert!(!pattern.is_match("    \"// FREO-BEGIN\\n\","));
         assert!(!pattern.is_match("let url = \"http://FREO-BEGIN\";"));
         assert!(!pattern.is_match("let a = 1; // FREO-BEGIN"));
@@ -517,8 +473,6 @@ mod tests {
     fn a_marker_sharing_a_line_with_code_is_not_a_marker() {
         let output = run_stream("let a = 1; // FREO-BEGIN\nlet b = 2;\n").unwrap();
 
-        // The trailing comment is stripped as an ordinary keyword comment, and
-        // no block is opened, so the following line survives.
         assert_eq!(output, "let a = 1;\nlet b = 2;\n");
     }
 
@@ -555,8 +509,6 @@ mod tests {
 
     #[test]
     fn a_trailing_end_marker_does_not_close_a_block() {
-        // The `END` does not own its line, so the block runs to EOF and the
-        // whole file is refused rather than being silently truncated.
         let error = run_stream("// FREO-BEGIN\ndrop me\nlet b = 2; // FREO-END\n").unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
