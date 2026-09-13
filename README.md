@@ -24,6 +24,9 @@ Use them to explain *why* — trade-offs made, alternatives ruled out, constrain
 visible in the code itself, or anything a reviewer would otherwise have to ask about.
 These comments are stripped automatically on PR approval and will never land on main.
 
+`FREO` must be the **first thing in the comment** — `// FREO: …`, not `// TODO FREO: …` —
+otherwise the comment is treated as ordinary prose and kept.
+
 Examples:
 - `// FREO: using polling here instead of a webhook because the vendor API doesn't support webhooks yet`
 - `// FREO: this cast is safe — the upstream type is wrong, see issue #42`
@@ -53,24 +56,35 @@ With this rule in place, Claude will embed its reasoning in the code itself — 
 
 ### What counts as a "FREO comment"?
 
-`freo` looks for a **single-line comment token** for the file type (like `//`, `#`, `--`) and removes text matching:
+> **A comment is a `FREO` comment when it _starts_ with the keyword.**
 
-- optional whitespace
-- the comment token
-- optional whitespace
-- the keyword (case-insensitive, as a whole word)
-- optional `:`
-- the rest of that line
+`freo` finds the **single-line comment token** for the file type (like `//`, `#`, `--`), checks
+that the keyword (case-insensitive, as a whole word, with an optional `:`) is the first thing
+inside that comment, and removes the comment and the rest of its line.
 
 Examples (default keyword `FREO`):
 
 ```text
-let x = 1; // FREO: remove debug before merge
-# freo this is temporary
-SELECT * FROM users; -- FREO don't commit this query
+let x = 1; // FREO: remove debug before merge     -> let x = 1;
+# freo this is temporary                          -> (line removed)
+SELECT * FROM users; -- FREO don't commit this    -> SELECT * FROM users;
 ```
 
 If a line becomes empty after removing the comment, the whole line is removed.
+
+A comment that mentions the keyword further along is prose *about* the tool, not a note
+addressed to a reviewer, so it is kept:
+
+```text
+// see the FREO-BEGIN block above                 -> kept
+// TODO FREO: tidy this up                        -> kept
+let x = 1; // note: FREO strips these             -> kept
+```
+
+The bias is deliberate, and it is the rule the rest of `freo` follows too. A comment that
+survives stays visible in the code and can be deleted by hand. Content deleted in error is
+committed without anybody looking, because the cleanup runs *after* the approval. When the two
+are not equally recoverable, `freo` keeps.
 
 ### Multi-line comments
 
