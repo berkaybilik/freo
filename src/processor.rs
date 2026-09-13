@@ -227,16 +227,35 @@ fn find_comment_start(line: &str, comment_token: &str) -> CommentStart {
     }
 }
 
+/// Removes a comment from `text` when the comment *opens* with the keyword.
+///
+/// A comment that merely mentions the keyword further along — `// see the
+/// FREO-BEGIN block above` — is prose about the tool, not a note addressed to a
+/// reviewer, and is left alone. Erring this way is deliberate: a comment that
+/// survives stays visible in the diff and can be deleted by hand, whereas
+/// content deleted in error is committed unreviewed.
 fn strip_keyword_comment(text: &str, pattern: &Regex, comment_token: &str) -> String {
-    let search_from = match find_comment_start(text, comment_token) {
-        CommentStart::At(index) => text[..index].trim_end().len(),
+    let comment_start = match find_comment_start(text, comment_token) {
+        CommentStart::At(index) => index,
         CommentStart::None => return text.to_string(),
-        CommentStart::Unknown => 0,
+        // Quotes did not balance, so fall back to the first token on the line.
+        // The keyword still has to follow it, which keeps the guess the
+        // conservative one: at worst a comment survives that should have gone.
+        CommentStart::Unknown => match text.find(comment_token) {
+            Some(index) => index,
+            None => return text.to_string(),
+        },
     };
 
+    // Start at the whitespace run in front of the comment so the pattern's
+    // leading `\s*` can still absorb the gap after the code it trails.
+    let search_from = text[..comment_start].trim_end().len();
+
     match pattern.find_at(text, search_from) {
-        Some(match_) => remove_span(text, match_.start(), match_.end()),
-        None => text.to_string(),
+        Some(match_) if match_.start() == search_from => {
+            remove_span(text, match_.start(), match_.end())
+        }
+        _ => text.to_string(),
     }
 }
 
@@ -344,12 +363,59 @@ mod tests {
     }
 
     #[test]
-    fn strip_keyword_comment_falls_back_to_the_whole_line_when_quotes_do_not_balance() {
+    fn strip_keyword_comment_falls_back_to_the_first_token_when_quotes_do_not_balance() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
         let result =
             strip_keyword_comment("fn first<'a>(x: &str) {} // FREO: tidy", &pattern, "//");
 
         assert_eq!(result, "fn first<'a>(x: &str) {}");
+    }
+
+    #[test]
+    fn strip_keyword_comment_keeps_a_comment_that_only_mentions_the_keyword() {
+        let pattern = build_keyword_comment_pattern("//", "FREO");
+
+        for original in [
+            // The second token is what used to turn this into a match.
+            "// see the // FREO-BEGIN block above",
+            "// see the FREO-BEGIN block above",
+            "// TODO FREO: this is prose about the tool",
+            "let x = 5; // note: FREO strips these",
+            "//! the FREO keyword is configurable",
+        ] {
+            assert_eq!(
+                strip_keyword_comment(original, &pattern, "//"),
+                original,
+                "should have been left alone: {original}"
+            );
+        }
+    }
+
+    #[test]
+    fn strip_keyword_comment_requires_the_keyword_to_open_the_comment() {
+        let pattern = build_keyword_comment_pattern("//", "FREO");
+
+        // Opening the comment: removed.
+        assert_eq!(strip_keyword_comment("// FREO: go", &pattern, "//"), "");
+        assert_eq!(strip_keyword_comment("//FREO go", &pattern, "//"), "");
+        assert_eq!(
+            strip_keyword_comment("let x = 5;   // FREO go", &pattern, "//"),
+            "let x = 5;"
+        );
+
+        // One word into the comment: kept.
+        let original = "// a FREO: go";
+        assert_eq!(strip_keyword_comment(original, &pattern, "//"), original);
+    }
+
+    #[test]
+    fn strip_keyword_comment_keeps_a_later_comment_that_opens_with_the_keyword() {
+        // The first `//` opens the comment, so everything after it is one
+        // comment body, and that body does not start with the keyword.
+        let pattern = build_keyword_comment_pattern("//", "FREO");
+        let original = "let x = 5; // note // FREO: go";
+
+        assert_eq!(strip_keyword_comment(original, &pattern, "//"), original);
     }
 
     #[test]
