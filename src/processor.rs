@@ -62,6 +62,8 @@ where
     let keyword_pattern = build_keyword_comment_pattern(comment_token, keyword);
     let begin_pattern = build_block_marker_pattern(comment_token, keyword, BLOCK_BEGIN_SUFFIX);
     let end_pattern = build_block_marker_pattern(comment_token, keyword, BLOCK_END_SUFFIX);
+    let inline_end_pattern =
+        build_inline_block_marker_pattern(comment_token, keyword, BLOCK_END_SUFFIX);
 
     let mut open_block_line: Option<usize> = None;
     let mut line_number = 0usize;
@@ -70,17 +72,22 @@ where
     while reader.read_line(&mut current_line)? > 0 {
         line_number += 1;
 
+        // A marker owns its whole line, so every line from `BEGIN` through
+        // `END` — the markers included — is dropped in full.
         let processed_line = if open_block_line.is_some() {
-            match end_pattern.find(&current_line) {
-                Some(match_) => {
-                    open_block_line = None;
-                    remove_span(&current_line, match_.start(), match_.end())
-                }
-                None => String::new(),
+            if end_pattern.is_match(&current_line) {
+                open_block_line = None;
             }
-        } else if let Some(match_) = begin_pattern.find(&current_line) {
-            open_block_line = Some(line_number);
-            remove_span(&current_line, match_.start(), match_.end())
+            String::new()
+        } else if let Some(marker) = begin_pattern.find(&current_line) {
+            // `// FREO-BEGIN one-line note // FREO-END` opens and closes here.
+            if inline_end_pattern
+                .find_at(&current_line, marker.end())
+                .is_none()
+            {
+                open_block_line = Some(line_number);
+            }
+            String::new()
         } else {
             strip_keyword_comment(&current_line, &keyword_pattern, comment_token)
         };
@@ -118,13 +125,29 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
     build_case_insensitive(&pattern_format)
 }
 
+/// Matches a block marker that owns its line: nothing but whitespace may precede it.
+///
+/// A block marker deletes an unbounded range of the file, so it demands a far
+/// less ambiguous signal than the single-line form. Anchoring keeps a marker
+/// quoted inside a string (`"// FREO-BEGIN\n"` in a test fixture, say) from
+/// opening a block and swallowing everything up to the next `END`.
 fn build_block_marker_pattern(comment_token: &str, keyword: &str, suffix: &str) -> Regex {
+    build_marker_pattern(comment_token, keyword, suffix, r"^[ \t]*")
+}
+
+/// Matches a block marker anywhere on the line, for spotting an `END` that
+/// closes a block on the same line it was opened on.
+fn build_inline_block_marker_pattern(comment_token: &str, keyword: &str, suffix: &str) -> Regex {
+    build_marker_pattern(comment_token, keyword, suffix, "")
+}
+
+fn build_marker_pattern(comment_token: &str, keyword: &str, suffix: &str, prefix: &str) -> Regex {
     let comment_token_literal = regex::escape(comment_token);
     let keyword_literal = regex::escape(keyword);
 
     let pattern_format = format!(
-        r"\s*{}\s*{}-{}\b[^\r\n]*",
-        comment_token_literal, keyword_literal, suffix
+        r"{}{}[ \t]*{}-{}\b",
+        prefix, comment_token_literal, keyword_literal, suffix
     );
     build_case_insensitive(&pattern_format)
 }
@@ -418,6 +441,47 @@ mod tests {
     }
 
     #[test]
+    fn build_block_marker_pattern_requires_the_marker_to_own_the_line() {
+        let pattern = build_block_marker_pattern("//", "FREO", BLOCK_BEGIN_SUFFIX);
+
+        assert!(!pattern.is_match(r#"    "// FREO-BEGIN\n","#));
+        assert!(!pattern.is_match(r#"let url = "http://FREO-BEGIN";"#));
+        assert!(!pattern.is_match("let a = 1; // FREO-BEGIN"));
+    }
+
+    #[test]
+    fn a_quoted_marker_does_not_open_a_block() {
+        let output = run_stream(concat!(
+            "let fixture = [\n",
+            "    \"// FREO-BEGIN\\n\",\n",
+            "    \"// FREO-END\\n\",\n",
+            "];\n",
+        ))
+        .unwrap();
+
+        assert_eq!(
+            output,
+            "let fixture = [\n    \"// FREO-BEGIN\\n\",\n    \"// FREO-END\\n\",\n];\n"
+        );
+    }
+
+    #[test]
+    fn a_block_opened_and_closed_on_one_line_does_not_stay_open() {
+        let output = run_stream("// FREO-BEGIN short note // FREO-END\nkeep me\n").unwrap();
+
+        assert_eq!(output, "keep me\n");
+    }
+
+    #[test]
+    fn a_marker_sharing_a_line_with_code_is_not_a_marker() {
+        let output = run_stream("let a = 1; // FREO-BEGIN\nlet b = 2;\n").unwrap();
+
+        // The trailing comment is stripped as an ordinary keyword comment, and
+        // no block is opened, so the following line survives.
+        assert_eq!(output, "let a = 1;\nlet b = 2;\n");
+    }
+
+    #[test]
     fn block_markers_remove_every_line_between_them() {
         let output = run_stream(concat!(
             "fn main() {\n",
@@ -449,11 +513,13 @@ mod tests {
     }
 
     #[test]
-    fn block_markers_keep_code_preceding_the_marker_on_the_same_line() {
-        let output =
-            run_stream("let a = 1; // FREO-BEGIN\ndrop me\nlet b = 2; // FREO-END\n").unwrap();
+    fn a_trailing_end_marker_does_not_close_a_block() {
+        // The `END` does not own its line, so the block runs to EOF and the
+        // whole file is refused rather than being silently truncated.
+        let error = run_stream("// FREO-BEGIN\ndrop me\nlet b = 2; // FREO-END\n").unwrap_err();
 
-        assert_eq!(output, "let a = 1;\nlet b = 2;\n");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("line 1"), "{error}");
     }
 
     #[test]

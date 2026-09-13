@@ -30,7 +30,8 @@ Examples:
 - `// FREO: skipping validation here because this path is only reachable from internal services`
 
 For a note that spans several lines, wrap it in `FREO-BEGIN` / `FREO-END` instead of repeating
-the keyword on every line. Always close the block — an unterminated `FREO-BEGIN` fails the run.
+the keyword on every line. Put each marker on a line of its own, and always close the block —
+an unterminated `FREO-BEGIN` fails the run.
 
 ```
 // FREO-BEGIN
@@ -90,12 +91,15 @@ The markers are ordinary single-line comments, so they work in every language `f
 they follow a custom `keyword` — set `keyword: "ticket-123"` and you get `ticket-123-BEGIN`.
 Matching is case-insensitive, like the single-line form.
 
-- **Code before a marker is kept.** `let x = 1; // FREO-BEGIN` keeps `let x = 1;`. Everything
-  *strictly between* the markers is removed, whether or not it is a comment.
+- **A marker must own its line.** Only whitespace may precede it. `let x = 1; // FREO-BEGIN`
+  does *not* open a block — it's just an ordinary keyword comment, so the trailing comment is
+  stripped and `let x = 1;` stays. This is deliberate: a fence deletes an unbounded range of
+  the file, so it demands an unambiguous signal (see [Notes & limitations](#notes--limitations)).
+- **Marker lines are removed whole**, along with everything between them, comment or not.
 - **Markers don't nest.** The first `FREO-END` closes the block.
 - **A stray `FREO-END`** with no open block is stripped like any other keyword comment.
-- **An unterminated `FREO-BEGIN` is an error.** `freo` exits non-zero and leaves the file
-  byte-identical rather than deleting to end of file. Fix the marker and re-run.
+- **An unterminated `FREO-BEGIN` is an error.** `freo` exits non-zero and modifies **no file** —
+  not the offending one, and not the files that came before it. Fix the marker and re-run.
 
 For a one-line note, keep using the plain form — the fence is only worth its ceremony when the
 comment actually spans lines.
@@ -261,6 +265,13 @@ For Claude, Cursor, Copilot, Codex, or any AI assistant with a rules/instruction
 - **Single-line comment tokens only**: `freo` matches the language's single-line comment token. Multi-line
   rationale is supported through `FREO-BEGIN` / `FREO-END`, which are themselves single-line comments;
   native block comments (`/* … */`, Python docstrings) are not parsed.
+- **String literals are detected heuristically, one line at a time**: a comment token inside a string
+  (`x = "#FREO in a string"`) is left alone, by tracking quotes across the line. Two consequences.
+  If the quotes on a line don't balance — a Rust lifetime, an apostrophe in prose — `freo` can't tell,
+  and falls back to matching anywhere on the line. And because each line is read on its own, a token
+  inside a *multi-line* string (a Python docstring, a JS template literal, a heredoc) still looks like
+  a comment. Block markers are additionally protected by having to own their line, so the realistic
+  worst case for a quoted marker is a stripped line, not a deleted range.
 - **Only changed files**: the action runs on **added/modified files** in the PR compared to the base branch.
 - **Needs a PR context**: the action determines the base branch from PR metadata; it's intended for `pull_request`, `pull_request_review`, or `pull_request_target`.
 - **Fork PRs**: you typically can't push back to fork branches with the default token; the example workflow detects forks and skips pushing.
