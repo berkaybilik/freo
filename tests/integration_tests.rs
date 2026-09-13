@@ -147,3 +147,45 @@ fn run_leaves_the_file_untouched_when_a_block_marker_is_unterminated() {
         "the file must be byte-identical after a refused run"
     );
 }
+
+#[test]
+fn run_modifies_no_file_when_a_later_file_is_rejected() {
+    let dir = tempdir().expect("temp dir");
+
+    let good_path = dir.path().join("good.rs");
+    let good_original = "let x = 5; // FREO: strip me\n";
+    fs::write(&good_path, good_original).unwrap();
+
+    let bad_path = dir.path().join("bad.rs");
+    let bad_original = "// FREO-BEGIN\n// note without an end marker\n";
+    fs::write(&bad_path, bad_original).unwrap();
+
+    let config = AppConfig::new(None, None);
+    let resolver = CommentTokenResolver::new(config.comment_map().cloned());
+
+    let error = run(&config, &[good_path.clone(), bad_path.clone()], &resolver)
+        .expect_err("unterminated block should fail the run");
+
+    assert!(error.to_string().contains("bad.rs"), "{error}");
+    assert_eq!(
+        fs::read_to_string(&good_path).unwrap(),
+        good_original,
+        "a file processed before the rejected one must not be modified"
+    );
+    assert_eq!(fs::read_to_string(&bad_path).unwrap(), bad_original);
+}
+
+#[test]
+fn run_reports_which_file_failed_when_it_cannot_be_read() {
+    let dir = tempdir().expect("temp dir");
+
+    let missing_path = dir.path().join("vanished.rs");
+
+    let config = AppConfig::new(None, None);
+    let resolver = CommentTokenResolver::new(config.comment_map().cloned());
+
+    let error = run(&config, std::slice::from_ref(&missing_path), &resolver)
+        .expect_err("a missing file should fail the run");
+
+    assert!(error.to_string().contains("vanished.rs"), "{error}");
+}

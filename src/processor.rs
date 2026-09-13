@@ -1,32 +1,68 @@
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use regex::{Regex, RegexBuilder};
 use tempfile::NamedTempFile;
 
-pub fn remove_matching_comments(
-    comment_token: &str,
-    keyword: &str,
-    file_path: &Path,
-) -> io::Result<()> {
-    let parent = file_path.parent().unwrap_or(std::path::Path::new("."));
+/// A rewritten file that has not replaced its original yet.
+///
+/// Holding the rewrite back lets a caller process a whole batch before any of
+/// it lands on disk, so one file with an unterminated block can refuse the run
+/// without leaving the files ahead of it already modified. Dropping a
+/// `PreparedFile` discards the rewrite and deletes the temporary file.
+#[must_use = "a prepared file is only written back by `commit`"]
+pub struct PreparedFile {
+    temp_file: NamedTempFile,
+    original_path: PathBuf,
+}
+
+impl PreparedFile {
+    /// The path this rewrite will replace once committed.
+    pub fn path(&self) -> &Path {
+        &self.original_path
+    }
+}
+
+/// Rewrites `file_path` into a temporary file alongside it, without touching
+/// the original. Pair with [`commit`].
+pub fn prepare(comment_token: &str, keyword: &str, file_path: &Path) -> io::Result<PreparedFile> {
+    let parent = file_path.parent().unwrap_or(Path::new("."));
     let temp_file = NamedTempFile::new_in(parent)?;
 
     {
         let reader = BufReader::new(File::open(file_path)?);
         let mut writer = BufWriter::new(&temp_file);
 
-        remove_matching_comments_from_stream(comment_token, keyword, reader, &mut writer).map_err(
-            |err| io::Error::new(err.kind(), format!("{}: {}", file_path.display(), err)),
-        )?;
+        remove_matching_comments_from_stream(comment_token, keyword, reader, &mut writer)?;
 
         writer.flush()?;
     }
 
-    persist_temp_file(temp_file, file_path, parent)?;
+    Ok(PreparedFile {
+        temp_file,
+        original_path: file_path.to_path_buf(),
+    })
+}
 
-    Ok(())
+/// Atomically replaces the original file with its rewrite.
+pub fn commit(prepared: PreparedFile) -> io::Result<()> {
+    let PreparedFile {
+        temp_file,
+        original_path,
+    } = prepared;
+    let parent = original_path.parent().unwrap_or(Path::new(".")).to_owned();
+
+    persist_temp_file(temp_file, &original_path, &parent)
+}
+
+/// Rewrites a single file in place, as [`prepare`] followed by [`commit`].
+pub fn remove_matching_comments(
+    comment_token: &str,
+    keyword: &str,
+    file_path: &Path,
+) -> io::Result<()> {
+    commit(prepare(comment_token, keyword, file_path)?)
 }
 
 fn persist_temp_file(
@@ -103,7 +139,8 @@ where
             io::ErrorKind::InvalidData,
             format!(
                 "unterminated {keyword}-{BLOCK_BEGIN_SUFFIX} block opened on line {opened_at} \
-                 (expected a matching {keyword}-{BLOCK_END_SUFFIX}); file left unchanged"
+                 (expected a matching {keyword}-{BLOCK_END_SUFFIX} on a line of its own); \
+                 no files were modified"
             ),
         ));
     }
