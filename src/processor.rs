@@ -82,7 +82,7 @@ where
             open_block_line = Some(line_number);
             remove_span(&current_line, match_.start(), match_.end())
         } else {
-            strip_keyword_comment(&current_line, &keyword_pattern)
+            strip_keyword_comment(&current_line, &keyword_pattern, comment_token)
         };
 
         if !processed_line.is_empty() {
@@ -147,8 +147,72 @@ fn remove_span(text: &str, start: usize, end: usize) -> String {
     stripped_text
 }
 
-fn strip_keyword_comment(text: &str, pattern: &Regex) -> String {
-    match pattern.find(text) {
+/// Where a comment begins on a line, as far as a language-agnostic scan can tell.
+#[derive(Debug, PartialEq, Eq)]
+enum CommentStart {
+    /// A comment token was found outside of any string literal.
+    At(usize),
+    /// The line is entirely code: every comment token on it sits inside a string.
+    None,
+    /// Quotes did not balance, so the scan cannot be trusted. Rust lifetimes
+    /// (`&'a str`) and apostrophes in prose both land here.
+    Unknown,
+}
+
+/// Finds the first comment token on `line` that is not inside a string literal.
+///
+/// This is a heuristic, not a parser: it tracks single, double and backtick
+/// quotes with backslash escapes, which covers every language `freo` ships a
+/// token for. When the quotes do not balance it reports [`CommentStart::Unknown`]
+/// rather than guessing, and the caller falls back to scanning the whole line.
+fn find_comment_start(line: &str, comment_token: &str) -> CommentStart {
+    let bytes = line.as_bytes();
+    let token = comment_token.as_bytes();
+
+    let mut quote: Option<u8> = None;
+    let mut index = 0;
+
+    // Quote characters and `\` are all ASCII, and UTF-8 continuation bytes are
+    // always >= 0x80, so stepping a byte at a time can never false-match inside
+    // a multi-byte character, and any index returned is a char boundary.
+    while index < bytes.len() {
+        match quote {
+            Some(open_quote) => {
+                match bytes[index] {
+                    b'\\' => index += 1,
+                    byte if byte == open_quote => quote = None,
+                    _ => {}
+                }
+                index += 1;
+            }
+            None => {
+                if bytes[index..].starts_with(token) {
+                    return CommentStart::At(index);
+                }
+                if matches!(bytes[index], b'"' | b'\'' | b'`') {
+                    quote = Some(bytes[index]);
+                }
+                index += 1;
+            }
+        }
+    }
+
+    match quote {
+        Some(_) => CommentStart::Unknown,
+        None => CommentStart::None,
+    }
+}
+
+fn strip_keyword_comment(text: &str, pattern: &Regex, comment_token: &str) -> String {
+    let search_from = match find_comment_start(text, comment_token) {
+        // Start at the whitespace run in front of the comment so the pattern's
+        // leading `\s*` can still absorb the gap after the code it trails.
+        CommentStart::At(index) => text[..index].trim_end().len(),
+        CommentStart::None => return text.to_string(),
+        CommentStart::Unknown => 0,
+    };
+
+    match pattern.find_at(text, search_from) {
         Some(match_) => remove_span(text, match_.start(), match_.end()),
         None => text.to_string(),
     }
@@ -181,7 +245,7 @@ mod tests {
     #[test]
     fn strip_keyword_comment_truncates_trailing_matching_comment() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result = strip_keyword_comment("let x = 5; // FREO: remove debug", &pattern);
+        let result = strip_keyword_comment("let x = 5; // FREO: remove debug", &pattern, "//");
 
         assert_eq!(result, "let x = 5;");
     }
@@ -189,7 +253,7 @@ mod tests {
     #[test]
     fn strip_keyword_comment_preserves_newline_when_matching_comment_is_trailing() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result = strip_keyword_comment("let x = 5; // FREO: remove debug\n", &pattern);
+        let result = strip_keyword_comment("let x = 5; // FREO: remove debug\n", &pattern, "//");
 
         assert_eq!(result, "let x = 5;\n");
     }
@@ -198,10 +262,10 @@ mod tests {
     fn strip_keyword_comment_returns_empty_when_only_matching_comment_remains() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
 
-        let result = strip_keyword_comment("// FREO clean up\n", &pattern);
+        let result = strip_keyword_comment("// FREO clean up\n", &pattern, "//");
         assert_eq!(result, "");
 
-        let result = strip_keyword_comment("// FREO clean up", &pattern);
+        let result = strip_keyword_comment("// FREO clean up", &pattern, "//");
         assert_eq!(result, "");
     }
 
@@ -209,7 +273,7 @@ mod tests {
     fn strip_keyword_comment_returns_original_line_if_no_match() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
         let original = "let x = 5; // NOTE keep";
-        let result = strip_keyword_comment(original, &pattern);
+        let result = strip_keyword_comment(original, &pattern, "//");
 
         assert_eq!(result, original);
     }
@@ -219,15 +283,78 @@ mod tests {
         let pattern = build_keyword_comment_pattern("//", "FREO");
         let original = r#"println!("FREO: keep this string");"#;
 
-        let result = strip_keyword_comment(original, &pattern);
+        let result = strip_keyword_comment(original, &pattern, "//");
 
         assert_eq!(result, original);
 
         let original = r#"//println!("FREO: keep this string");"#;
 
-        let result = strip_keyword_comment(original, &pattern);
+        let result = strip_keyword_comment(original, &pattern, "//");
 
         assert_eq!(result, original);
+    }
+
+    #[test]
+    fn strip_keyword_comment_ignores_a_comment_token_inside_a_string_literal() {
+        let hash_pattern = build_keyword_comment_pattern("#", "FREO");
+        let original = r##"x = "#FREO in a string""##;
+
+        assert_eq!(
+            strip_keyword_comment(original, &hash_pattern, "#"),
+            original
+        );
+
+        let slash_pattern = build_keyword_comment_pattern("//", "FREO");
+        let original = r#"let url = "http://FREO.example/docs";"#;
+
+        assert_eq!(
+            strip_keyword_comment(original, &slash_pattern, "//"),
+            original
+        );
+    }
+
+    #[test]
+    fn strip_keyword_comment_still_strips_a_comment_that_follows_a_string_literal() {
+        let pattern = build_keyword_comment_pattern("#", "FREO");
+        let result = strip_keyword_comment("print('#FREO') # FREO: drop this\n", &pattern, "#");
+
+        assert_eq!(result, "print('#FREO')\n");
+    }
+
+    #[test]
+    fn strip_keyword_comment_falls_back_to_the_whole_line_when_quotes_do_not_balance() {
+        let pattern = build_keyword_comment_pattern("//", "FREO");
+        let result =
+            strip_keyword_comment("fn first<'a>(x: &str) {} // FREO: tidy", &pattern, "//");
+
+        assert_eq!(result, "fn first<'a>(x: &str) {}");
+    }
+
+    #[test]
+    fn find_comment_start_classifies_lines() {
+        assert_eq!(
+            find_comment_start("let x = 5; // note", "//"),
+            CommentStart::At(11)
+        );
+        assert_eq!(
+            find_comment_start(r#"x = "// note""#, "//"),
+            CommentStart::None
+        );
+        assert_eq!(find_comment_start("let y = 5;", "//"), CommentStart::None);
+        assert_eq!(
+            find_comment_start("it's fine // note", "//"),
+            CommentStart::Unknown
+        );
+        // An escaped quote does not close the string.
+        assert_eq!(
+            find_comment_start(r#"x = "a\"// b""#, "//"),
+            CommentStart::None
+        );
+        // Multi-byte characters before the token must not shift the index.
+        assert_eq!(
+            find_comment_start("let e = \"é\"; // t", "//"),
+            CommentStart::At(14)
+        );
     }
 
     #[test]
