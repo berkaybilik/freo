@@ -116,7 +116,7 @@ where
             }
             String::new()
         } else if let Some(marker) = begin_pattern.find(&current_line) {
-            // `// FREO-BEGIN one-line note // FREO-END` opens and closes here.
+            // A marker line carrying its own END closes the block immediately.
             if inline_end_pattern
                 .find_at(&current_line, marker.end())
                 .is_none()
@@ -166,8 +166,8 @@ fn build_keyword_comment_pattern(comment_token: &str, keyword: &str) -> Regex {
 ///
 /// A block marker deletes an unbounded range of the file, so it demands a far
 /// less ambiguous signal than the single-line form. Anchoring keeps a marker
-/// quoted inside a string (`"// FREO-BEGIN\n"` in a test fixture, say) from
-/// opening a block and swallowing everything up to the next `END`.
+/// quoted inside a string — a test fixture or a doc example — from opening a
+/// block and swallowing everything up to the next `END`.
 fn build_block_marker_pattern(comment_token: &str, keyword: &str, suffix: &str) -> Regex {
     build_marker_pattern(comment_token, keyword, suffix, r"^[ \t]*")
 }
@@ -365,7 +365,10 @@ mod tests {
         );
 
         let slash_pattern = build_keyword_comment_pattern("//", "FREO");
-        let original = r#"let url = "http://FREO.example/docs";"#;
+        // Escaped rather than a raw string on purpose: `freo` runs on its own
+        // source, and its line scan cannot see that a raw string's inner quotes
+        // are literal. Keep fixtures containing the keyword in escaped strings.
+        let original = "let url = \"http://FREO.example/docs\";";
 
         assert_eq!(
             strip_keyword_comment(original, &slash_pattern, "//"),
@@ -481,8 +484,9 @@ mod tests {
     fn build_block_marker_pattern_requires_the_marker_to_own_the_line() {
         let pattern = build_block_marker_pattern("//", "FREO", BLOCK_BEGIN_SUFFIX);
 
-        assert!(!pattern.is_match(r#"    "// FREO-BEGIN\n","#));
-        assert!(!pattern.is_match(r#"let url = "http://FREO-BEGIN";"#));
+        // Escaped rather than raw strings: see the note in the string-literal test.
+        assert!(!pattern.is_match("    \"// FREO-BEGIN\\n\","));
+        assert!(!pattern.is_match("let url = \"http://FREO-BEGIN\";"));
         assert!(!pattern.is_match("let a = 1; // FREO-BEGIN"));
     }
 
