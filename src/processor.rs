@@ -89,6 +89,7 @@ where
     let end_pattern = build_block_marker_pattern(comment_token, keyword, BLOCK_END_SUFFIX);
     let inline_end_pattern =
         build_inline_block_marker_pattern(comment_token, keyword, BLOCK_END_SUFFIX);
+    let string_profile = StringProfile::default();
 
     let mut open_block_line: Option<usize> = None;
     let mut line_number = 0usize;
@@ -111,7 +112,12 @@ where
             }
             String::new()
         } else {
-            strip_keyword_comment(&current_line, &keyword_pattern, comment_token)
+            strip_keyword_comment(
+                &current_line,
+                &keyword_pattern,
+                comment_token,
+                &string_profile,
+            )
         };
 
         if !processed_line.is_empty() {
@@ -192,36 +198,115 @@ enum CommentStart {
     Unknown,
 }
 
-fn find_comment_start(line: &str, comment_token: &str) -> CommentStart {
+/// How a string kind writes a delimiter that does not close the string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Escape {
+    /// `"a\"b"` — a backslash escapes the next byte.
+    Backslash,
+    /// `'it''s'` — the delimiter doubled stands for one literal delimiter.
+    Double,
+    /// Go's backticks: the first closing delimiter always closes.
+    None,
+}
+
+/// One way of writing a string literal: a delimiter pair and its escape rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StringKind {
+    open: String,
+    close: String,
+    escape: Escape,
+}
+
+impl StringKind {
+    pub fn new(open: &str, close: &str, escape: Escape) -> Self {
+        Self {
+            open: open.to_string(),
+            close: close.to_string(),
+            escape,
+        }
+    }
+}
+
+/// The string syntax the scanner should recognise while looking for a comment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StringProfile {
+    kinds: Vec<StringKind>,
+}
+
+impl StringProfile {
+    /// Builds a profile, ordering kinds so a longer opener always wins over a
+    /// shorter one that prefixes it — `"""` must be tried before `"`.
+    pub fn new(mut kinds: Vec<StringKind>) -> Self {
+        kinds.sort_by(|a, b| b.open.len().cmp(&a.open.len()));
+        Self { kinds }
+    }
+}
+
+impl Default for StringProfile {
+    fn default() -> Self {
+        Self::new(vec![
+            StringKind::new("\"", "\"", Escape::Backslash),
+            StringKind::new("'", "'", Escape::Backslash),
+            StringKind::new("`", "`", Escape::Backslash),
+        ])
+    }
+}
+
+fn find_comment_start(line: &str, comment_token: &str, profile: &StringProfile) -> CommentStart {
     let bytes = line.as_bytes();
     let token = comment_token.as_bytes();
 
-    let mut quote: Option<u8> = None;
+    let mut open_kind: Option<&StringKind> = None;
     let mut index = 0;
 
     while index < bytes.len() {
-        match quote {
-            Some(open_quote) => {
-                match bytes[index] {
-                    b'\\' => index += 1,
-                    byte if byte == open_quote => quote = None,
+        match open_kind {
+            Some(kind) => {
+                let close = kind.close.as_bytes();
+
+                match kind.escape {
+                    Escape::Backslash if bytes[index] == b'\\' => {
+                        index += 2;
+                        continue;
+                    }
+                    Escape::Double
+                        if bytes[index..].starts_with(close)
+                            && bytes[index + close.len()..].starts_with(close) =>
+                    {
+                        index += close.len() * 2;
+                        continue;
+                    }
                     _ => {}
                 }
-                index += 1;
+
+                if bytes[index..].starts_with(close) {
+                    index += close.len();
+                    open_kind = None;
+                } else {
+                    index += 1;
+                }
             }
             None => {
                 if bytes[index..].starts_with(token) {
                     return CommentStart::At(index);
                 }
-                if matches!(bytes[index], b'"' | b'\'' | b'`') {
-                    quote = Some(bytes[index]);
+
+                match profile
+                    .kinds
+                    .iter()
+                    .find(|kind| bytes[index..].starts_with(kind.open.as_bytes()))
+                {
+                    Some(kind) => {
+                        index += kind.open.len();
+                        open_kind = Some(kind);
+                    }
+                    None => index += 1,
                 }
-                index += 1;
             }
         }
     }
 
-    match quote {
+    match open_kind {
         Some(_) => CommentStart::Unknown,
         None => CommentStart::None,
     }
@@ -234,8 +319,13 @@ fn find_comment_start(line: &str, comment_token: &str) -> CommentStart {
 /// reviewer, and is left alone. Erring this way is deliberate: a comment that
 /// survives stays visible in the diff and can be deleted by hand, whereas
 /// content deleted in error is committed unreviewed.
-fn strip_keyword_comment(text: &str, pattern: &Regex, comment_token: &str) -> String {
-    let comment_start = match find_comment_start(text, comment_token) {
+fn strip_keyword_comment(
+    text: &str,
+    pattern: &Regex,
+    comment_token: &str,
+    profile: &StringProfile,
+) -> String {
+    let comment_start = match find_comment_start(text, comment_token, profile) {
         CommentStart::At(index) => index,
         CommentStart::None => return text.to_string(),
         // Quotes did not balance, so fall back to the first token on the line.
@@ -264,6 +354,10 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    fn profile() -> StringProfile {
+        StringProfile::default()
+    }
+
     #[test]
     fn build_keyword_comment_pattern_matches_common_variants() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
@@ -286,7 +380,12 @@ mod tests {
     #[test]
     fn strip_keyword_comment_truncates_trailing_matching_comment() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result = strip_keyword_comment("let x = 5; // FREO: remove debug", &pattern, "//");
+        let result = strip_keyword_comment(
+            "let x = 5; // FREO: remove debug",
+            &pattern,
+            "//",
+            &profile(),
+        );
 
         assert_eq!(result, "let x = 5;");
     }
@@ -294,7 +393,12 @@ mod tests {
     #[test]
     fn strip_keyword_comment_preserves_newline_when_matching_comment_is_trailing() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result = strip_keyword_comment("let x = 5; // FREO: remove debug\n", &pattern, "//");
+        let result = strip_keyword_comment(
+            "let x = 5; // FREO: remove debug\n",
+            &pattern,
+            "//",
+            &profile(),
+        );
 
         assert_eq!(result, "let x = 5;\n");
     }
@@ -303,10 +407,10 @@ mod tests {
     fn strip_keyword_comment_returns_empty_when_only_matching_comment_remains() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
 
-        let result = strip_keyword_comment("// FREO clean up\n", &pattern, "//");
+        let result = strip_keyword_comment("// FREO clean up\n", &pattern, "//", &profile());
         assert_eq!(result, "");
 
-        let result = strip_keyword_comment("// FREO clean up", &pattern, "//");
+        let result = strip_keyword_comment("// FREO clean up", &pattern, "//", &profile());
         assert_eq!(result, "");
     }
 
@@ -314,7 +418,7 @@ mod tests {
     fn strip_keyword_comment_returns_original_line_if_no_match() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
         let original = "let x = 5; // NOTE keep";
-        let result = strip_keyword_comment(original, &pattern, "//");
+        let result = strip_keyword_comment(original, &pattern, "//", &profile());
 
         assert_eq!(result, original);
     }
@@ -324,13 +428,13 @@ mod tests {
         let pattern = build_keyword_comment_pattern("//", "FREO");
         let original = r#"println!("FREO: keep this string");"#;
 
-        let result = strip_keyword_comment(original, &pattern, "//");
+        let result = strip_keyword_comment(original, &pattern, "//", &profile());
 
         assert_eq!(result, original);
 
         let original = r#"//println!("FREO: keep this string");"#;
 
-        let result = strip_keyword_comment(original, &pattern, "//");
+        let result = strip_keyword_comment(original, &pattern, "//", &profile());
 
         assert_eq!(result, original);
     }
@@ -341,7 +445,7 @@ mod tests {
         let original = r##"x = "#FREO in a string""##;
 
         assert_eq!(
-            strip_keyword_comment(original, &hash_pattern, "#"),
+            strip_keyword_comment(original, &hash_pattern, "#", &profile()),
             original
         );
 
@@ -349,7 +453,7 @@ mod tests {
         let original = "let url = \"http://FREO.example/docs\";";
 
         assert_eq!(
-            strip_keyword_comment(original, &slash_pattern, "//"),
+            strip_keyword_comment(original, &slash_pattern, "//", &profile()),
             original
         );
     }
@@ -357,7 +461,12 @@ mod tests {
     #[test]
     fn strip_keyword_comment_still_strips_a_comment_that_follows_a_string_literal() {
         let pattern = build_keyword_comment_pattern("#", "FREO");
-        let result = strip_keyword_comment("print('#FREO') # FREO: drop this\n", &pattern, "#");
+        let result = strip_keyword_comment(
+            "print('#FREO') # FREO: drop this\n",
+            &pattern,
+            "#",
+            &profile(),
+        );
 
         assert_eq!(result, "print('#FREO')\n");
     }
@@ -365,8 +474,12 @@ mod tests {
     #[test]
     fn strip_keyword_comment_falls_back_to_the_first_token_when_quotes_do_not_balance() {
         let pattern = build_keyword_comment_pattern("//", "FREO");
-        let result =
-            strip_keyword_comment("fn first<'a>(x: &str) {} // FREO: tidy", &pattern, "//");
+        let result = strip_keyword_comment(
+            "fn first<'a>(x: &str) {} // FREO: tidy",
+            &pattern,
+            "//",
+            &profile(),
+        );
 
         assert_eq!(result, "fn first<'a>(x: &str) {}");
     }
@@ -384,7 +497,7 @@ mod tests {
             "//! the FREO keyword is configurable",
         ] {
             assert_eq!(
-                strip_keyword_comment(original, &pattern, "//"),
+                strip_keyword_comment(original, &pattern, "//", &profile()),
                 original,
                 "should have been left alone: {original}"
             );
@@ -396,16 +509,25 @@ mod tests {
         let pattern = build_keyword_comment_pattern("//", "FREO");
 
         // Opening the comment: removed.
-        assert_eq!(strip_keyword_comment("// FREO: go", &pattern, "//"), "");
-        assert_eq!(strip_keyword_comment("//FREO go", &pattern, "//"), "");
         assert_eq!(
-            strip_keyword_comment("let x = 5;   // FREO go", &pattern, "//"),
+            strip_keyword_comment("// FREO: go", &pattern, "//", &profile()),
+            ""
+        );
+        assert_eq!(
+            strip_keyword_comment("//FREO go", &pattern, "//", &profile()),
+            ""
+        );
+        assert_eq!(
+            strip_keyword_comment("let x = 5;   // FREO go", &pattern, "//", &profile()),
             "let x = 5;"
         );
 
         // One word into the comment: kept.
         let original = "// a FREO: go";
-        assert_eq!(strip_keyword_comment(original, &pattern, "//"), original);
+        assert_eq!(
+            strip_keyword_comment(original, &pattern, "//", &profile()),
+            original
+        );
     }
 
     #[test]
@@ -415,31 +537,81 @@ mod tests {
         let pattern = build_keyword_comment_pattern("//", "FREO");
         let original = "let x = 5; // note // FREO: go";
 
-        assert_eq!(strip_keyword_comment(original, &pattern, "//"), original);
+        assert_eq!(
+            strip_keyword_comment(original, &pattern, "//", &profile()),
+            original
+        );
     }
 
     #[test]
     fn find_comment_start_classifies_lines() {
         assert_eq!(
-            find_comment_start("let x = 5; // note", "//"),
+            find_comment_start("let x = 5; // note", "//", &profile()),
             CommentStart::At(11)
         );
         assert_eq!(
-            find_comment_start(r#"x = "// note""#, "//"),
+            find_comment_start(r#"x = "// note""#, "//", &profile()),
             CommentStart::None
         );
-        assert_eq!(find_comment_start("let y = 5;", "//"), CommentStart::None);
         assert_eq!(
-            find_comment_start("it's fine // note", "//"),
+            find_comment_start("let y = 5;", "//", &profile()),
+            CommentStart::None
+        );
+        assert_eq!(
+            find_comment_start("it's fine // note", "//", &profile()),
             CommentStart::Unknown
         );
         assert_eq!(
-            find_comment_start(r#"x = "a\"// b""#, "//"),
+            find_comment_start(r#"x = "a\"// b""#, "//", &profile()),
             CommentStart::None
         );
         assert_eq!(
-            find_comment_start("let e = \"é\"; // t", "//"),
+            find_comment_start("let e = \"é\"; // t", "//", &profile()),
             CommentStart::At(14)
+        );
+    }
+
+    #[test]
+    fn string_profile_supports_multi_byte_delimiters() {
+        let triple = StringProfile::new(vec![
+            StringKind::new("\"\"\"", "\"\"\"", Escape::None),
+            StringKind::new("\"", "\"", Escape::Backslash),
+        ]);
+
+        // The triple opener must win over the single one that prefixes it.
+        assert_eq!(
+            find_comment_start(r#"doc = """a # b""" # note"#, "#", &triple),
+            CommentStart::At(18)
+        );
+    }
+
+    #[test]
+    fn string_profile_supports_a_doubled_delimiter_escape() {
+        let sql = StringProfile::new(vec![StringKind::new("'", "'", Escape::Double)]);
+
+        // In SQL a backslash is literal, so `'a\'` is a complete string and the
+        // comment that follows it is real.
+        assert_eq!(
+            find_comment_start(r"SELECT 'a\' -- note", "--", &sql),
+            CommentStart::At(12)
+        );
+
+        // The default profile treats the backslash as escaping the delimiter,
+        // so the string never closes and it declines to guess.
+        assert_eq!(
+            find_comment_start(r"SELECT 'a\' -- note", "--", &profile()),
+            CommentStart::Unknown
+        );
+    }
+
+    #[test]
+    fn string_profile_supports_a_delimiter_with_no_escape() {
+        let go = StringProfile::new(vec![StringKind::new("`", "`", Escape::None)]);
+
+        // A backslash is literal inside a Go raw string, so the tick closes it.
+        assert_eq!(
+            find_comment_start(r"s := `a\` // note", "//", &go),
+            CommentStart::At(10)
         );
     }
 
