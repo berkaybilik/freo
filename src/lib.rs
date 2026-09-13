@@ -1,5 +1,5 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod comment;
 pub mod config;
@@ -20,6 +20,8 @@ pub fn run(
 
     println!("Finding matching lines...");
 
+    let mut prepared = Vec::with_capacity(file_paths.len());
+
     for file_path in file_paths {
         println!("Processing file: {}", file_path.display());
         let Some(token) = resolver.token_for(file_path) else {
@@ -29,8 +31,20 @@ pub fn run(
             );
             continue;
         };
-        processor::remove_matching_comments(token, config.keyword(), file_path.as_path())?;
+        prepared.push(
+            processor::prepare(token, config.keyword(), file_path.as_path())
+                .map_err(|err| name_the_file(file_path, err))?,
+        );
+    }
+
+    for file in prepared {
+        let file_path = file.path().to_path_buf();
+        processor::commit(file).map_err(|err| name_the_file(&file_path, err))?;
     }
 
     Ok(())
+}
+
+fn name_the_file(file_path: &Path, err: io::Error) -> io::Error {
+    io::Error::new(err.kind(), format!("{}: {}", file_path.display(), err))
 }
